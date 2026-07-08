@@ -1,0 +1,35 @@
+[project]
+name = "opendata-skill"
+version = "2.2.0"
+description = "Comprehensive Open Data Fetcher (Yahoo, WB, OECD, Weather)"
+authors = [{ name = "Masashi Iida" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "yfinance",
+    "jpholiday",
+    "wbgapi",
+    "openmeteo-requests",
+    "requests-cache",
+    "retry-requests",
+    "pandas",
+    "polars",
+    "requests",
+    "tenacity>=9.1.4",
+    "edinetdb",
+    "pytrends",
+    "python-dotenv>=1.2.2",
+    "matplotlib",
+    "seaborn",
+    "google-api-python-client",
+]
+
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
