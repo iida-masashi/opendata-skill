@@ -34,7 +34,7 @@ def fetch_freight_data(tickers: str = "BDRY", start_date: str | None = None, end
             if 'level_1' in data.columns:
                  data.rename(columns={'level_1': 'Ticker'}, inplace=True)
             elif 'Ticker' not in data.columns: # fallback
-                 # 如果 stack 结果不对，尝试另一种方式
+                 # stack結果が想定と異なる場合は別方式を試す
                  data = data.stack().reset_index()
                  data.rename(columns={'level_1': 'Ticker'}, inplace=True)
         else:

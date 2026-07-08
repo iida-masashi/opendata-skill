@@ -1,5 +1,5 @@
 
-# Wrapper around fetch_estat.py to simplify Trade Statistics fetching
+# Wrapper around estat_fetcher.py to simplify Trade Statistics fetching
 # Uses specific e-Stat IDs for Trade Statistics (Financial Ministry)
 
 def fetch_trade_stats(
@@ -10,11 +10,11 @@ def fetch_trade_stats(
     """
     print("Fetching Trade Statistics (via e-Stat)...")
     print("Note: Trade Statistics IDs vary by year and commodity classification (HS Code).")  # noqa: E501
-    print("Please use the 'fetch_estat.py' script with the specific ID you need.")
+    print("Please use the 'estat_fetcher.py' script with the specific ID you need.")
     print("")
     print("Common Keywords for e-Stat Search: '貿易統計', '輸出', '輸入'")
     print("")
-    print("Example: python opendata-skill/scripts/fetch_estat.py --statsDataId <ID>")
+    print("Example: python scripts/estat_fetcher.py --statsDataId <ID>")
 
     # We could implement a search here using e-Stat's getStatsList API?
     # But that requires more complex logic.
@@ -22,4 +22,4 @@ def fetch_trade_stats(
 
 if __name__ == "__main__":
     print("This script is a placeholder. Trade statistics are available via e-Stat.")
-    print("Use: python opendata-skill/scripts/fetch_estat.py --statsDataId <ID>")
+    print("Use: python scripts/estat_fetcher.py --statsDataId <ID>")
