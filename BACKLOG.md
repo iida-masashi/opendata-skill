@@ -58,7 +58,37 @@
 
 ---
 
-## 次期候補 (v2.3)
+## v2.3.0: Fail-Loud リファクタリング (2026-10-02 完了)
+
+- ~~Phase 0〜5（テスト基盤・Hub中核・共通ヘルパー・握り潰し除去・データ破損バグ・CLI専用フェッチャー）~~ [DONE] — 詳細は `docs/REFACTORING_PLAN.md`
+- ~~RESAS API 提供終了（2025-03-24）に伴う `resas_fetcher` 削除~~ [DONE]
+
+---
+
+## 残作業 (v2.3.0 リファクタリングの残課題)
+
+### データ取得の不具合・未対応
+1. **TEPCO 電力需給 CSV の移転確認** (`power_fetcher.py`): juyo-2026.csv / juyo-d-j.csv が 404、juyo-2025.csv は 2025-07-22 で停止。新しい公開先を確認して URL を更新する
+2. **ENTSO-E A75 の残り2点** (`entsoe_fetcher.py`): 揚水等の消費系列（outBiddingZone）が発電系列と同じ psr_type を持ち値が混ざる。curveType A03 で省略された position を前値で埋めていない
+3. **e-Stat の大きな表** (`estat_fetcher.py`): NEXT_KEY ページング未対応（10万セル超は切り詰め）。10桁時間コード（例 `2024000101`）の解釈を一次情報で確認する
+4. **OECD / World Bank の date 契約**: OECD（TIME_PERIOD）と World Bank（ワイド形式 YR*）が Hub の `date`/`value` 契約に乗らない
+5. **comtrade の `reporter="ALL"`**: 0 に変換されるが、0 は報告国として無効
+
+### 確認待ち（一次情報・実環境での検証が必要）
+6. **FAOSTAT の item 指定** (`usda_fetcher.py`): 品目名を渡しているが、API が品目コードを要求するか未確認（確認時 API が 521 で応答せず）
+7. **x_grok の実キー検証** (`x_grok_fetcher.py`): `/v1/responses` + `x_search` を実キーで未検証（system role・temperature・`grok-4-latest` の対応可否）。citation は件数のみ検査し投稿ごとの URL 照合はしていない
+8. **plateau の同名自治体**: 府中市など同名の自治体を区別できない（現在は ValueError）。自治体コードでの検索手段を調べる
+9. **Datalastic のエラー応答形式**: 不明のため 200 で返るエラーの検出が未実装
+
+### 判断保留（現状維持）
+10. **PMI の ISM 系列**: NAPM 等は FRED から削除済み、MANEMP / IPMAN は PMI ではない。エイリアスはコメントで実態を明記して残している。代替データ源を探すか削除するか
+11. **edinet の RateLimitError リトライ**: edinetdb では日次/月次上限の意味なので、リトライは待ち時間の無駄になりうる
+12. **pyarrow 非依存**: pandas 境界は dict 経由で変換している。依存に加えるか
+13. **maff / trade のプレースホルダ**: 取得処理が無いまま Hub の自動検出に載る
+
+---
+
+## 次期候補 (v2.4)
 
 1. **海運運賃指数の詳細化**: Freightos Baltic Index (FBX), Drewry WCI, SCFI の統合
 2. **クレジット・信用指標**: Moody's Analytics, CDSスプレッド
