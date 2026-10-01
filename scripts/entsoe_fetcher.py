@@ -1,9 +1,20 @@
 import argparse
+import re
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import requests
 from dotenv import load_dotenv
+
+from api_utils import (
+    cli_entry,
+    default_date_range,
+    redact,
+    require_api_key,
+    save_output,
+)
+from api_utils import get_with_retry_redacted as _get_redacted
 
 load_dotenv()
 
@@ -40,6 +51,22 @@ DOC_TYPES = {
     "wind_solar":      ("A69", "A01"),   # Wind & solar forecast (Day ahead)
 }
 
+# 「パラメータは正しいがデータ0件」を示す Acknowledgement の Reason テキスト
+NO_DATA_TEXT = "No matching data found"
+
+
+def _parse_resolution(res: str) -> timedelta:
+    """ENTSO-E の resolution (ISO 8601: PT15M / PT60M / P1D 等) を timedelta にする。"""
+    m = re.fullmatch(r"PT(\d+)M|PT(\d+)H|P(\d+)D", res)
+    if not m:
+        raise ValueError(f"Unsupported ENTSO-E resolution: {res}")
+    minutes, hours, days = m.groups()
+    if minutes:
+        return timedelta(minutes=int(minutes))
+    if hours:
+        return timedelta(hours=int(hours))
+    return timedelta(days=int(days))
+
 
 def fetch_entsoe_data(
     data_type: str = "load_actual",
@@ -54,11 +81,6 @@ def fetch_entsoe_data(
     - country: 'DE', 'FR', 'IT', 'ES', ...
     無料だが登録制。APIキー取得: https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html
     """
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
     api_key = require_api_key(
         "ENTSOE_API_KEY", "ENTSO-E",
         "https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html"
@@ -69,10 +91,7 @@ def fetch_entsoe_data(
         raise ValueError(f"Unknown data_type: {data_type}. Available: {list(DOC_TYPES.keys())}")
     doc_type, process_type = DOC_TYPES[data_type]
 
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    start_date, end_date = default_date_range(start_date, end_date, 30)
 
     # ENTSO-E日時形式: YYYYMMDDhhmm
     period_start = start_date.replace("-", "") + "0000"
@@ -102,56 +121,71 @@ def fetch_entsoe_data(
 
     print(f"Fetching ENTSO-E: {data_type} for {country} ({start_date}→{end_date})...")
     try:
-        response = requests.get(BASE_URL, params=params, timeout=60)
-        response.raise_for_status()
+        response = _get_redacted(BASE_URL, [api_key], params=params)
+    except requests.exceptions.HTTPError as e:
+        # ENTSO-E は「パラメータは正しいがデータ0件」を 400 + Acknowledgement で返すことがある
+        if e.response is not None and NO_DATA_TEXT in e.response.text:
+            print("No ENTSO-E data found (No matching data found).")
+            return pl.DataFrame()
+        raise
 
-        # ENTSO-E は XML を返す
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(response.text)
-        ns = {"ns": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
+    # ENTSO-E は XML を返す
+    root = ET.fromstring(response.text)
+    ns = {"ns": root.tag.split("}")[0].strip("{")} if "}" in root.tag else {}
 
-        records = []
-        for ts in root.findall(".//ns:TimeSeries", ns) if ns else root.findall(".//TimeSeries"):
-            period = ts.find("ns:Period", ns) if ns else ts.find("Period")
-            if period is None:
-                continue
-            start_elem = period.find("ns:timeInterval/ns:start", ns) if ns else period.find("timeInterval/start")
-            resolution = period.find("ns:resolution", ns) if ns else period.find("resolution")
+    def _find(elem: ET.Element, path: str) -> ET.Element | None:
+        return elem.find(path.replace("{ns}", "ns:") if ns else path.replace("{ns}", ""), ns)
+
+    def _findall(elem: ET.Element, path: str) -> list[ET.Element]:
+        return elem.findall(path.replace("{ns}", "ns:") if ns else path.replace("{ns}", ""), ns)
+
+    # HTTP 200 で返る Acknowledgement（エラー or 0件通知）
+    if root.tag.endswith("Acknowledgement_MarketDocument"):
+        reason = " ".join(t.text or "" for t in _findall(root, ".//{ns}Reason/{ns}text"))
+        if NO_DATA_TEXT in reason:
+            print("No ENTSO-E data found (No matching data found).")
+            return pl.DataFrame()
+        raise RuntimeError(f"ENTSO-E API error: {redact(reason or response.text[:300], [api_key])}")
+
+    records = []
+    for ts in _findall(root, ".//{ns}TimeSeries"):
+        psr = _find(ts, "{ns}MktPSRType/{ns}psrType")
+        psr_type = psr.text if psr is not None else None
+        for period in _findall(ts, "{ns}Period"):
+            start_elem = _find(period, "{ns}timeInterval/{ns}start")
+            resolution = _find(period, "{ns}resolution")
             base_start = start_elem.text if start_elem is not None else None
             res_text = resolution.text if resolution is not None else "PT60M"
+            step = _parse_resolution(res_text)
+            start_dt = datetime.strptime(base_start, "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC) if base_start else None
 
-            for pt in period.findall("ns:Point", ns) if ns else period.findall("Point"):
-                pos = pt.find("ns:position", ns) if ns else pt.find("position")
-                qty = pt.find("ns:quantity", ns) if ns else pt.find("quantity")
-                price = pt.find("ns:price.amount", ns) if ns else pt.find("price.amount")
+            for pt in _findall(period, "{ns}Point"):
+                pos = _find(pt, "{ns}position")
+                qty = _find(pt, "{ns}quantity")
+                price = _find(pt, "{ns}price.amount")
                 value = qty.text if qty is not None else (price.text if price is not None else None)
+                position = int(pos.text) if pos is not None else None
                 records.append({
+                    "date": start_dt + (position - 1) * step if start_dt and position else None,
                     "period_start": base_start,
-                    "position": int(pos.text) if pos is not None else None,
+                    "position": position,
                     "resolution": res_text,
+                    "psr_type": psr_type,
                     "value": float(value) if value else None,
                 })
 
-        if not records:
-            print("No ENTSO-E data found or empty response.")
-            return pl.DataFrame()
-
-        df = pl.DataFrame(records).drop_nulls(subset=["value"])
-        df = df.with_columns(
-            pl.lit(country.upper()).alias("country"),
-            pl.lit(data_type).alias("data_type"),
-        )
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-        return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text[:300] if e.response else str(e)}")
+    if not records:
+        print("No ENTSO-E data found or empty response.")
         return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching ENTSO-E data: {e}")
-        return pl.DataFrame()
+
+    df = pl.DataFrame(records).drop_nulls(subset=["value"])
+    df = df.with_columns(
+        pl.lit(country.upper()).alias("country"),
+        pl.lit(data_type).alias("data_type"),
+    )
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -172,4 +206,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

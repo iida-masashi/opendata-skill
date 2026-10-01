@@ -1,13 +1,10 @@
 """Tests for usda_fetcher.py (FAOSTAT: 実API, USDA: モック)."""
-import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from usda_fetcher import (
     FAOSTAT_DOMAIN,
@@ -61,7 +58,7 @@ def test_mock_faostat_response(mock_get: MagicMock) -> None:
 
 
 @patch("usda_fetcher.requests.get")
-def test_mock_usda_quickstats(mock_get: MagicMock) -> None:
+def test_mock_usda_quickstats(mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
     """モック: USDA QuickStatsレスポンス (USDA_API_KEY未設定時はモック利用)。"""
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -72,8 +69,7 @@ def test_mock_usda_quickstats(mock_get: MagicMock) -> None:
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp
 
-    if not os.getenv("USDA_API_KEY"):
-        os.environ["USDA_API_KEY"] = "test_key_mock"
+    monkeypatch.setenv("USDA_API_KEY", "test_key_mock")
 
     df = fetch_usda_quickstats(commodity="corn", year="2023")
     assert df.height == 1
@@ -108,3 +104,48 @@ def test_fetch_agri_empty(mock_get: MagicMock) -> None:
 
     df = fetch_agri_data(source="faostat", commodity="corn")
     assert df.is_empty()
+
+
+def test_fetch_agri_unknown_source_raises() -> None:
+    """source のタイプミスが FAOSTAT に黙って流れず ValueError。"""
+    with pytest.raises(ValueError, match="Unknown source"):
+        fetch_agri_data(source="usdaa", commodity="corn")
+
+
+@patch("usda_fetcher.requests.get")
+def test_fetch_agri_http_error_raises(mock_get: MagicMock, make_response) -> None:
+    """FAOSTAT の HTTP エラーは空DFに化けず例外。"""
+    import requests
+    mock_get.return_value = make_response(text="Bad Request", status=400)
+
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_agri_data(source="faostat", commodity="corn")
+
+
+@patch("usda_fetcher.requests.get")
+def test_usda_http_error_redacts_key(
+    mock_get: MagicMock, make_response, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """USDA QuickStats の HTTP エラーで API キー（URL クエリ）がメッセージに出ない。"""
+    import requests
+    monkeypatch.setenv("USDA_API_KEY", "SECRET_USDA_KEY")
+    mock_get.return_value = make_response(
+        json={"error": ["unauthorized"]}, status=401,
+        url="https://quickstats.nass.usda.gov/api/api_GET?key=SECRET_USDA_KEY",
+    )
+
+    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
+        fetch_agri_data(source="usda", commodity="corn", year="2023")
+    assert "SECRET_USDA_KEY" not in str(exc_info.value)
+
+
+@patch("usda_fetcher.requests.get")
+def test_usda_error_payload_raises(
+    mock_get: MagicMock, make_response, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """HTTP 200 で返る {"error": [...]} は 0件扱いせず例外。"""
+    monkeypatch.setenv("USDA_API_KEY", "test_key_mock")
+    mock_get.return_value = make_response(json={"error": ["bad request - invalid query"]})
+
+    with pytest.raises(RuntimeError, match="invalid query"):
+        fetch_usda_quickstats(commodity="corn", year="2023")

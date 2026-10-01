@@ -35,7 +35,7 @@ uv run python scripts/yahoo_fetcher.py --tickers 7203.T USDJPY=X --start 2023-01
 
 **例2: 過去の気象データの取得 (東京)**
 ```bash
-uv run python scripts/meteo_fetcher.py --lat 35.6895 --lon 139.6917 --historical
+uv run python scripts/meteo_fetcher.py --lat 35.6895 --lon 139.6917 --historical --start 2024-01-01 --end 2024-01-31
 ```
 
 **例3: Googleトレンドの比較 ("Python" vs "Rust")**
@@ -99,7 +99,7 @@ df_inbound = hub.get_inbound_visitors()                    # JNTO 訪日外客�
 
 ### 3. 複数ソース並列取得とアラインメント (covariate パイプライン)
 ```python
-# 複数ソースを並列に取得（1ソースの失敗は隔離され空DFになる）
+# 複数ソースを並列に取得（1ソースの失敗は隔離され空DFになる。例外は hub.last_errors[label]）
 sources = hub.get_many([
     {"label": "weather", "method": "get_weather", "kwargs": {"lat": 35.68, "lon": 139.77}},
     {"label": "tankan",  "method": "get_boj_tankan", "kwargs": {"series": "tankan_large_mfg"}},
@@ -135,7 +135,7 @@ uv run python scripts/gdelt_fetcher.py --query "port congestion" --theme port_co
 uv run python scripts/ais_fetcher.py --port singapore
 
 # 山火事
-uv run python scripts/firms_fetcher.py --region california --days 7
+uv run python scripts/firms_fetcher.py --region california --days 5
 
 # ENTSO-E電力価格
 uv run python scripts/entsoe_fetcher.py --type day_ahead_price --country DE
@@ -175,14 +175,11 @@ APIキー不要のもの: **GDELT, USGS, FAOSTAT, ECB**
 
 ## ⚙️ セットアップと環境変数
 
-一部のAPI（e-Stat、RESASなど）を使用するには、プロジェクトルートの `.env` ファイルにAPIキーを設定する必要があります。
+一部のAPI（e-Stat、MLITなど）を使用するには、プロジェクトルートの `.env` ファイルにAPIキーを設定する必要があります。
 
 ```env
 # Required for e-Stat (Gov Statistics)
 ESTAT_API_KEY=your_app_id_here
-
-# Required for RESAS (Regional Economy)
-RESAS_API_KEY=your_api_key_here
 
 # Required for MLIT (Land Price) - Optional for some endpoints
 MLIT_API_KEY=your_api_key_here

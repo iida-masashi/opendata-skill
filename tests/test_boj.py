@@ -1,12 +1,9 @@
 """Tests for boj_fetcher.py (BOJ Time-Series Data Search API — TANKAN)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from boj_fetcher import SERIES_ALIAS, fetch_boj_data
 
@@ -85,3 +82,62 @@ def test_fetch_boj_empty_body_no_crash(mock_get: MagicMock, tmp_path: Path) -> N
     df = fetch_boj_data(series="tankan_large_mfg", output_file=out)
     assert df.is_empty()
     assert not Path(out).exists()
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_json_error_body_raises(mock_get: MagicMock, make_response) -> None:
+    """format=csv でもエラー時は JSON で返る（BOJ API マニュアル）。空DFに化けず送出する。"""
+    mock_get.return_value = make_response(
+        json={"STATUS": 400, "MESSAGEID": "M181013E", "MESSAGE": "指定した系列コードは存在しません。：1番目のコード"}
+    )
+    with pytest.raises(RuntimeError, match="M181013E"):
+        fetch_boj_data(series="TKXXXX")
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_csv_status_not_200_raises(mock_get: MagicMock, make_response) -> None:
+    mock_get.return_value = make_response(text="STATUS,503\nMESSAGEID,M181091S\nMESSAGE,DB error\n")
+    with pytest.raises(RuntimeError, match="503"):
+        fetch_boj_data(series="tankan_large_mfg")
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_unrecognized_body_raises(mock_get: MagicMock, make_response) -> None:
+    mock_get.return_value = make_response(text="<html>maintenance</html>")
+    with pytest.raises(RuntimeError):
+        fetch_boj_data(series="tankan_large_mfg")
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_http_error_propagates(mock_get: MagicMock, make_response) -> None:
+    """以前は except Exception で空DFを返していた。"""
+    import requests
+    mock_get.return_value = make_response(status=404)
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_boj_data(series="tankan_large_mfg")
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_follows_nextposition(mock_get: MagicMock, make_response) -> None:
+    """NEXTPOSITION に数値があれば startPosition を付けて続きを取得し、結合する。"""
+    header = "SERIES_CODE,NAME_OF_TIME_SERIES,UNIT,FREQUENCY,CATEGORY,LAST_UPDATE,SURVEY_DATES,VALUES\n"
+    page1 = "STATUS,200\nMESSAGEID,M181000I\nNEXTPOSITION,2\n" + header + "A,a,DI,Q,T,20260401,202501,1\n"
+    page2 = "STATUS,200\nMESSAGEID,M181000I\nNEXTPOSITION,\n" + header + "B,b,DI,Q,T,20260401,202501,2\n"
+    mock_get.side_effect = [make_response(text=page1), make_response(text=page2)]
+
+    df = fetch_boj_data(series="A,B")
+    assert df["SERIES_CODE"].to_list() == ["A", "B"]
+    assert mock_get.call_count == 2
+    assert "startPosition" not in mock_get.call_args_list[0].kwargs["params"]
+    assert mock_get.call_args_list[1].kwargs["params"]["startPosition"] == "2"
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_http_error_keeps_api_message(mock_get: MagicMock, make_response) -> None:
+    """実 API はエラー時 HTTP 400 + JSON 本文を返す。MESSAGEID を例外メッセージに残す。"""
+    import requests
+    mock_get.return_value = make_response(
+        json={"STATUS": 400, "MESSAGEID": "M181013E", "MESSAGE": "Series code does not exist"}, status=400
+    )
+    with pytest.raises(requests.exceptions.HTTPError, match="M181013E"):
+        fetch_boj_data(series="TKXXXX")

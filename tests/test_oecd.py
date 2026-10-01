@@ -1,5 +1,4 @@
 """Tests for oecd_fetcher.py (OECD SDMX-JSON API)."""
-import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -7,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from oecd_fetcher import OECD_DATASETS, fetch_oecd_data, parse_sdmx_json
 
@@ -131,7 +129,7 @@ def test_fetch_oecd_country_filter(mock_get: MagicMock, tmp_path: Path) -> None:
     assert "USA" not in content
 
 
-@patch("tenacity.nap.sleep", lambda *_a, **_k: None)
+@patch("api_utils.get_with_retry.retry.sleep", lambda *_a, **_k: None)
 @patch("oecd_fetcher.requests.get")
 def test_fetch_oecd_transient_error_retried_then_raised(
     mock_get: MagicMock, tmp_path: Path
@@ -162,3 +160,26 @@ def test_fetch_oecd_unknown_dataset_still_tries(mock_get: MagicMock, tmp_path: P
     fetch_oecd_data("CUSTOM.DATASET,V1.0", output_file=out)
 
     assert mock_get.called
+
+
+@patch("oecd_fetcher.requests.get")
+def test_fetch_oecd_returns_dataframe_without_output_file(
+    mock_get: MagicMock, make_response, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hub 経由(output_file 無し)でも DataFrame を返し、既定名の CSV を勝手に書かない。"""
+    monkeypatch.chdir(tmp_path)
+    mock_get.return_value = make_response(json=_make_sdmx_payload())
+    df = fetch_oecd_data("MEI")
+    assert isinstance(df, pl.DataFrame)
+    assert df.height == 4
+    assert list(tmp_path.iterdir()) == []
+
+
+@patch("oecd_fetcher.requests.get")
+def test_fetch_oecd_country_column_missing_raises(mock_get: MagicMock, make_response) -> None:
+    """国列が見つからないとき、国フィルタを黙って飛ばして全世界データを返さない。"""
+    payload = _make_sdmx_payload()
+    payload["data"]["structures"][0]["dimensions"]["observation"][0]["id"] = "COUNTERPART"
+    mock_get.return_value = make_response(json=payload)
+    with pytest.raises(ValueError, match="country"):
+        fetch_oecd_data("MEI", countries="JPN")

@@ -4,16 +4,12 @@ The old decorator retried on bare Exception, so programming errors (KeyError etc
 were retried 5x with ~16s of dead backoff. The fix retries ONLY transient errors
 (network + HTTP 429/5xx).
 """
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import requests
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-import api_utils
 from api_utils import _is_transient, retry_with_ratelimit
 
 
@@ -37,7 +33,6 @@ def test_is_transient_classification() -> None:
     assert not _is_transient(_http_error(400))
 
 
-@patch("tenacity.nap.sleep", lambda *_a, **_k: None)
 def test_programming_error_fails_fast() -> None:
     """KeyError は再試行されず 1 回で送出される（無駄な5回バックオフを避ける）。"""
     calls = {"n": 0}
@@ -52,7 +47,6 @@ def test_programming_error_fails_fast() -> None:
     assert calls["n"] == 1  # was 5 before the fix
 
 
-@patch("tenacity.nap.sleep", lambda *_a, **_k: None)
 def test_429_is_retried() -> None:
     """HTTP 429 は最大5回まで再試行される。"""
     calls = {"n": 0}
@@ -67,7 +61,6 @@ def test_429_is_retried() -> None:
     assert calls["n"] == 5
 
 
-@patch("tenacity.nap.sleep", lambda *_a, **_k: None)
 @patch("meteo_fetcher.requests.get")
 def test_module_get_helper_retries_on_5xx_then_succeeds(mock_get) -> None:
     """各フェッチャーの _get_with_retry が 5xx で再試行し、回復したら結果を返す。

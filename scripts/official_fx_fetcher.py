@@ -1,9 +1,10 @@
 import argparse
-from datetime import UTC, datetime, timedelta
 from io import StringIO
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが official_fx_fetcher.requests.get を patch する
+from api_utils import cli_entry, default_date_range, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 # ECB Statistical Data Warehouse (SDMX 2.1) - APIキー不要
 ECB_BASE = "https://data-api.ecb.europa.eu/service/data/EXR"
@@ -25,10 +26,7 @@ def fetch_ecb_fx(
     key = f"{frequency}.{currency.upper()}.EUR.SP00.A"
     url = f"{ECB_BASE}/{key}"
 
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=365 * 2)).strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    start_date, end_date = default_date_range(start_date, end_date, days=365 * 2)
 
     params = {
         "startPeriod": start_date,
@@ -38,13 +36,12 @@ def fetch_ecb_fx(
     headers = {"Accept": "text/csv"}
 
     print(f"Fetching ECB official FX: EUR/{currency} ({start_date}→{end_date})...")
-    response = requests.get(url, params=params, headers=headers, timeout=60)
-    response.raise_for_status()
+    response = _get_with_retry(url, params=params, headers=headers)
 
-    try:
-        df = pl.read_csv(StringIO(response.text))
-    except Exception:  # noqa: BLE001
+    if not response.text.strip():
+        # 正常応答で本文が空 = 該当期間のデータ0件
         return pl.DataFrame()
+    df = pl.read_csv(StringIO(response.text))
 
     if df.is_empty():
         return df
@@ -85,14 +82,9 @@ def fetch_jpy_fx(
             f"JPY FX not supported for {curr}. Supported: {sorted(_JPY_SUPPORTED)}"
         )
 
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=365 * 2)).strftime("%Y%m%d")
-    else:
-        start_date = start_date.replace("-", "")
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y%m%d")
-    else:
-        end_date = end_date.replace("-", "")
+    start_date, end_date = default_date_range(start_date, end_date, days=365 * 2)
+    start_date = start_date.replace("-", "")
+    end_date = end_date.replace("-", "")
 
     print(f"Fetching JPY FX via Frankfurter (ECB-derived): {curr}/JPY ({start_date}→{end_date})...")
 
@@ -103,23 +95,21 @@ def fetch_jpy_fx(
     )
     params = {"from": curr, "to": "JPY"}
 
-    try:
-        response = requests.get(url, params=params, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-        rates = data.get("rates", {})
-        records = [{"date": d, "value": r.get("JPY")} for d, r in rates.items()]
-        if not records:
-            return pl.DataFrame()
-        df = pl.DataFrame(records).sort("date")
-        df = df.with_columns(
-            pl.lit(f"{curr}/JPY").alias("pair"),
-            pl.lit("Frankfurter (ECB-derived)").alias("source"),
-        )
-        return df
-    except Exception as e:  # noqa: BLE001
-        print(f"JPY FX fetch failed: {e}")
+    response = _get_with_retry(url, params=params)
+    data = response.json()
+    if not isinstance(data, dict) or "rates" not in data:
+        msg = data.get("message") if isinstance(data, dict) else None
+        raise RuntimeError(f"Frankfurter API error: {msg or str(data)[:300]}")
+    rates = data["rates"]
+    records = [{"date": d, "value": r.get("JPY")} for d, r in rates.items()]
+    if not records:
         return pl.DataFrame()
+    df = pl.DataFrame(records).sort("date")
+    df = df.with_columns(
+        pl.lit(f"{curr}/JPY").alias("pair"),
+        pl.lit("Frankfurter (ECB-derived)").alias("source"),
+    )
+    return df
 
 
 # 後方互換のエイリアス (deprecated)
@@ -135,31 +125,27 @@ def fetch_official_fx(
 ) -> pl.DataFrame:
     """
     公的機関の公表為替レートを取得するわ。
-    - source: 'ecb' (ECB/Eurosystem) / 'boj' (日本銀行)
+    - source: 'ecb' (ECB/Eurosystem) / 'boj' (円建て: Frankfurter 経由の ECB 由来クロスレート)
+    - currency: ecb は対ユーロの相手通貨、boj は対円の基準通貨（USD/EUR/...）。
+      boj で 'JPY'（既定値。Hub も既定で渡す）が来た場合は JPY/JPY は無意味なので USD/JPY を返す。
     - 用途: 会計・決算・税務・契約用の公式レート（Yahooの市場値とは区別）
     """
-    try:
-        if source.lower() == "ecb":
-            df = fetch_ecb_fx(currency=currency, start_date=start_date, end_date=end_date)
-        elif source.lower() == "boj":
-            df = fetch_boj_fx(currency=currency, start_date=start_date, end_date=end_date)
-        else:
-            raise ValueError(f"Unknown source: {source}")
+    if source.lower() == "ecb":
+        df = fetch_ecb_fx(currency=currency, start_date=start_date, end_date=end_date)
+    elif source.lower() == "boj":
+        if currency.upper() == "JPY":
+            print("source='boj' は円建てレートのため currency='JPY' を USD (USD/JPY) として扱います。")
+            currency = "USD"
+        df = fetch_boj_fx(currency=currency, start_date=start_date, end_date=end_date)
+    else:
+        raise ValueError(f"Unknown source: {source}")
 
-        if df.is_empty():
-            print("No official FX data found.")
-            return df
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
+    if df.is_empty():
+        print("No official FX data found.")
         return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text[:300] if e.response else str(e)}")
-        return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching official FX: {e}")
-        return pl.DataFrame()
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -180,4 +166,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

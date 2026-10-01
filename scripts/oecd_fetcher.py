@@ -2,12 +2,10 @@ import argparse
 from typing import Any
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが oecd_fetcher.requests.get を patch する
 
-try:
-    from api_utils import rate_limited, retry_with_ratelimit
-except ImportError:
-    from .api_utils import rate_limited, retry_with_ratelimit
+from api_utils import cli_entry, rate_limited, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 # OECD Dataset Mapping (Verified for 2024-2025 SDMX API)
 # Pattern: {AgencyID},{DataflowID},{Version}
@@ -103,7 +101,6 @@ def parse_sdmx_json(data: dict[str, Any]) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-@retry_with_ratelimit
 @rate_limited(max_calls=1, period=1.0)
 def fetch_oecd_data(
     dataset_code: str,
@@ -111,9 +108,10 @@ def fetch_oecd_data(
     start_year: int | None = None,
     end_year: int | None = None,
     output_file: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches OECD data using the new SDMX-JSON API (sdmx.oecd.org).
+    output_file を指定すると CSV にも保存する。
     """
     info = OECD_DATASETS.get(dataset_code.upper())
     if not info:
@@ -138,23 +136,15 @@ def fetch_oecd_data(
         params["endPeriod"] = f"{end_year}"
 
     print(f"Requesting: {base_url}")
-    try:
-        response = requests.get(base_url, params=params, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as e:
-        # 一時的エラー (429/5xx/接続) は再送出して @retry_with_ratelimit に
-        # 任せる。リトライ枯渇後はそのまま送出され呼び出し側が検知できる。
-        print(f"Error fetching data from OECD API: {e}")
-        print("Note: Ensure the dataset code is correct and the API is reachable.")
-        raise
+    # 一時的エラー (429/5xx/接続) は _get_with_retry が再試行し、枯渇後は送出される。
+    data = _get_with_retry(base_url, params=params).json()
 
     print("Parsing JSON data...")
     df = parse_sdmx_json(data)
 
     if df.is_empty():
         print("No data found.")
-        return
+        return df
 
     # Post-filtering by country if requested
     if countries != 'all':
@@ -166,20 +156,20 @@ def fetch_oecd_data(
                 country_col = col
                 break
 
-        if country_col:
-            df = df.filter(pl.col(country_col).is_in(country_list))
-            print(f"Filtered to countries: {countries} ({len(df)} rows remaining)")
-        else:
-            print("Warning: Could not identify country column for filtering. Columns found:", df.columns)
+        if not country_col:
+            # フィルタを黙って飛ばすと全世界データを「指定国のデータ」として返してしまう
+            raise ValueError(
+                f"Could not identify country column for filtering countries={countries!r}. "
+                f"Columns found: {df.columns}"
+            )
+        df = df.filter(pl.col(country_col).is_in(country_list))
+        print(f"Filtered to countries: {countries} ({len(df)} rows remaining)")
 
-    if not output_file:
-        output_file = f"oecd_{dataset_code.lower()}.csv"
+    save_output(df, output_file)
+    return df
 
-    print(f"Saving {len(df)} rows to {output_file}...")
-    df.write_csv(output_file, include_header=True)
-    print("Done.")
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch OECD Data using the new SDMX-JSON API (2024+ Edition).")
     parser.add_argument("--dataset", required=True, help="OECD Dataset Code (e.g., 'MEI', 'QNA', 'TUD', 'CLI')")
     parser.add_argument("--countries", default="all", help="Country Codes (ISO3, comma-separated). Default: 'all'.")
@@ -188,4 +178,9 @@ if __name__ == "__main__":
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_oecd_data(args.dataset, args.countries, args.start, args.end, args.out)
+    fetch_oecd_data(args.dataset, args.countries, args.start, args.end,
+                    args.out or f"oecd_{args.dataset.lower()}.csv")
+
+
+if __name__ == "__main__":
+    cli_entry(main)

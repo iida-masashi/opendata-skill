@@ -6,18 +6,22 @@ BOJ Time-Series Data Search の公開REST API (APIキー不要)。
 エンドポイント: https://www.stat-search.boj.or.jp/api/v1/getDataCode
 レスポンスCSVは STATUS/NEXTPOSITION 等のメタ前文の後に SERIES_CODE 始まりの
 本体ヘッダが続くため、本体ヘッダ行までスキップしてからパースする。
+
+API 機能利用マニュアル (2026-02-18) の仕様:
+- STATUS は 200 が正常、400/500/503 はエラー。エラー時は format=csv でも JSON で返る。
+- 1リクエストの上限 (250系列 / 60,000データ) を超えると NEXTPOSITION に次回検索開始位置が入り、
+  STARTPOSITION に指定して続きを取得する (空なら全件取得済み)。
 """
 import argparse
 import io
+import json
 from typing import Any
 
 import polars as pl
 import requests
 
-try:
-    from api_utils import retry_with_ratelimit
-except ImportError:
-    from .api_utils import retry_with_ratelimit
+from api_utils import cli_entry, format_http_error, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 API_URL = "https://www.stat-search.boj.or.jp/api/v1/getDataCode"
 
@@ -32,14 +36,51 @@ SERIES_ALIAS = {
     "tankan_small_mfg": "TK99F1000601GCQ03000",        # 中小・製造業 業況判断DI(最近)
 }
 
+# NEXTPOSITION を辿る回数の上限（応答異常で無限ループしないための安全弁）
+_MAX_PAGES = 100
 
-@retry_with_ratelimit
-def _get_with_retry(url: str, **kwargs: Any) -> requests.Response:
-    """BOJ API を呼びつつ 429/5xx で再試行する。"""
-    kwargs.setdefault("timeout", 60)
-    resp = requests.get(url, **kwargs)
-    resp.raise_for_status()
-    return resp
+
+def _request_page(params: dict[str, Any]) -> str:
+    """1ページ分を取得する。エラー時 BOJ は HTTP 4xx/5xx + JSON 本文を返すので、本文を例外メッセージに含める。"""
+    try:
+        return _get_with_retry(API_URL, params=dict(params)).text
+    except requests.exceptions.HTTPError as e:
+        raise requests.exceptions.HTTPError(f"BOJ API {format_http_error(e)}", response=e.response) from e
+
+
+def _parse_page(text: str) -> tuple[pl.DataFrame, str]:
+    """1リクエスト分の応答を (本体DF, NEXTPOSITION) にする。API エラーは RuntimeError。"""
+    if text.lstrip().startswith("{"):
+        err = json.loads(text)
+        raise RuntimeError(
+            f"BOJ API error STATUS={err.get('STATUS')} {err.get('MESSAGEID')}: {err.get('MESSAGE')}"
+        )
+
+    # メタ前文 (STATUS / MESSAGEID / MESSAGE / PARAMETER / NEXTPOSITION ...) を読み、
+    # 本体ヘッダ ('SERIES_CODE,' で始まる行) を探す。
+    lines = text.splitlines()
+    header_idx = None
+    meta: dict[str, str] = {}
+    for i, ln in enumerate(lines):
+        if ln.startswith("SERIES_CODE,"):
+            header_idx = i
+            break
+        key, _, rest = ln.partition(",")
+        meta.setdefault(key, rest.split(",")[0].strip())
+
+    if "STATUS" not in meta:
+        raise RuntimeError(f"Unexpected BOJ API response: {text[:200]!r}")
+    if meta["STATUS"] != "200":
+        raise RuntimeError(
+            f"BOJ API error STATUS={meta['STATUS']} {meta.get('MESSAGEID', '')}: {meta.get('MESSAGE', '')}"
+        )
+
+    next_pos = meta.get("NEXTPOSITION", "")
+    if header_idx is None or header_idx + 1 >= len(lines):
+        # STATUS=200 で本体が無い (M181030I: 該当データ無し 等)
+        return pl.DataFrame(), next_pos
+    body = "\n".join(lines[header_idx:])
+    return pl.read_csv(io.StringIO(body)), next_pos
 
 
 def fetch_boj_data(
@@ -65,26 +106,21 @@ def fetch_boj_data(
         params["endDate"] = end_date
 
     print(f"Fetching BOJ series {code} (db={db})...")
-    try:
-        resp = _get_with_retry(API_URL, params=params)
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching BOJ data: {e}")
-        return pl.DataFrame()
+    pages: list[pl.DataFrame] = []
+    for _ in range(_MAX_PAGES):
+        page, next_pos = _parse_page(_request_page(params))
+        if not page.is_empty():
+            pages.append(page)
+        if not next_pos:
+            break
+        params["startPosition"] = next_pos
+    else:
+        raise RuntimeError(f"BOJ API paging did not finish within {_MAX_PAGES} requests")
 
-    # メタ前文をスキップ: 本体ヘッダ ('SERIES_CODE,' で始まる行) を探す。
-    lines = resp.text.splitlines()
-    header_idx = next(
-        (i for i, ln in enumerate(lines) if ln.startswith("SERIES_CODE,")), None
-    )
-    if header_idx is None or header_idx + 1 >= len(lines):
+    if not pages:
         print("No BOJ data rows found.")
         return pl.DataFrame()
-
-    body = "\n".join(lines[header_idx:])
-    df = pl.read_csv(io.StringIO(body))
-    if df.is_empty():
-        print("No BOJ data rows found.")
-        return pl.DataFrame()
+    df = pl.concat(pages, how="diagonal_relaxed")
 
     # 標準化: SURVEY_DATES -> date, VALUES -> value
     rename = {}
@@ -99,9 +135,7 @@ def fetch_boj_data(
     if "value" in df.columns:
         df = df.with_columns(pl.col("value").cast(pl.Float64, strict=False))
 
-    if output_file:
-        print(f"Saving to {output_file}...")
-        df.write_csv(output_file)
+    save_output(df, output_file)
     return df
 
 
@@ -121,4 +155,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

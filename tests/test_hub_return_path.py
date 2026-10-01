@@ -1,27 +1,17 @@
-"""Tests for Phase 2 ②: hub consumes the fetcher's returned DataFrame directly
-(no temp-CSV roundtrip) when the fetcher returns one, falling back to CSV only
-for None-returning fetchers.
+"""Tests that the hub consumes the fetcher's returned DataFrame directly
+(no temp-CSV roundtrip).
 
 The discriminating assertion: a returned df keeps its rich dtype (pl.Date),
-whereas the CSV roundtrip path would have stringified it (Utf8).
+whereas a CSV roundtrip would have stringified it (Utf8).
 """
 import datetime as dt
-import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import polars as pl
-import pytest
-
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-from scripts.opendata_hub import OpenDataHub  # noqa: E402
 
 
-@pytest.fixture
-def hub(tmp_path: Path) -> OpenDataHub:
-    return OpenDataHub(cache_dir=str(tmp_path / "cache"))
+from scripts.opendata_hub import OpenDataHub
 
 
 def _install_fake_fetcher(hub: OpenDataHub, name: str, module: ModuleType) -> None:
@@ -63,22 +53,6 @@ def test_returned_df_is_normalized(hub: OpenDataHub) -> None:
     df = hub.get_freight(tickers="BDRY")
     assert "date" in df.columns
     assert "value" in df.columns
-
-
-def test_none_returner_falls_back_to_csv(hub: OpenDataHub, tmp_path: Path) -> None:
-    """A fetcher that returns None but writes a CSV must still work (fallback)."""
-    fake = SimpleNamespace()
-
-    def fetch_freight_data(output_file=None, **kwargs):
-        pl.DataFrame({"date": ["2024-01-01"], "value": [5.0]}).write_csv(output_file)
-        return None
-
-    fake.fetch_freight_data = fetch_freight_data
-    _install_fake_fetcher(hub, "freight", fake)  # type: ignore[arg-type]
-
-    df = hub.get_freight(tickers="BDRY")
-    assert not df.is_empty()
-    assert df["value"][0] == 5.0
 
 
 def test_pandas_return_is_converted(hub: OpenDataHub) -> None:

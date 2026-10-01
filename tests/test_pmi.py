@@ -1,6 +1,5 @@
 """Tests for pmi_fetcher.py (FRED経由、FRED_API_KEY設定済み→実API)."""
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +7,6 @@ import polars as pl
 import pytest
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 # .env を opendata-skill ルートから読み込む
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -60,7 +58,7 @@ def test_real_fred_oecd_cli_jp() -> None:
 
 
 @patch("fred_fetcher.requests.get")
-def test_mock_fred_response(mock_get: MagicMock, tmp_path: Path) -> None:
+def test_mock_fred_response(mock_get: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """モック: FRED JSON observationsをパース。"""
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -74,8 +72,7 @@ def test_mock_fred_response(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_get.return_value = mock_resp
 
     # FRED_API_KEY が無い場合でも、require_api_key がモックされないため環境依存
-    if not os.getenv("FRED_API_KEY"):
-        os.environ["FRED_API_KEY"] = "test_key_mock"
+    monkeypatch.setenv("FRED_API_KEY", "test_key_mock")
 
     out = str(tmp_path / "pmi_mock.csv")
     df = fetch_pmi_data(series="us_new_orders", output_file=out)
@@ -85,15 +82,25 @@ def test_mock_fred_response(mock_get: MagicMock, tmp_path: Path) -> None:
 
 
 @patch("fred_fetcher.requests.get")
-def test_mock_http_error(mock_get: MagicMock) -> None:
-    """HTTPエラーで空DataFrame。"""
+def test_mock_http_error(mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch, make_response) -> None:
+    """HTTPエラーは空DataFrameに化けず送出される。"""
     import requests
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=MagicMock(text="err"))
-    mock_get.return_value = mock_resp
+    mock_get.return_value = make_response(text="err", status=400)
 
-    if not os.getenv("FRED_API_KEY"):
-        os.environ["FRED_API_KEY"] = "test_key_mock"
+    monkeypatch.setenv("FRED_API_KEY", "test_key_mock")
 
-    df = fetch_pmi_data(series="us_new_orders")
-    assert df.is_empty()
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_pmi_data(series="us_new_orders")
+
+
+@patch("fred_fetcher.requests.get")
+def test_pmi_alias_resolves_to_fred_id(
+    mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch, make_response
+) -> None:
+    """エイリアスは FRED 系列IDに解決され、series 列にはエイリアス名が入る。"""
+    mock_get.return_value = make_response(json={"observations": [{"date": "2023-01-01", "value": "1"}]})
+    monkeypatch.setenv("FRED_API_KEY", "test_key_mock")
+
+    df = fetch_pmi_data(series="oecd_cli_jp")
+    assert mock_get.call_args.kwargs["params"]["series_id"] == PMI_SERIES["oecd_cli_jp"]
+    assert df["series"].to_list() == ["oecd_cli_jp"]

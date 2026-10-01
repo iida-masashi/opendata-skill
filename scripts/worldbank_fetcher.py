@@ -1,6 +1,9 @@
 import argparse
 
+import polars as pl
 import wbgapi as wb
+
+from api_utils import cli_entry, save_output
 
 # Common Indicator Aliases for Easy Access
 INDICATORS = {
@@ -21,10 +24,11 @@ def fetch_worldbank_data(
     start_year: str | int | None = None,
     end_year: str | int | None = None,
     output_file: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches data from World Bank API using wbgapi.
     Covers General Stats (GDP, Pop) and SDGs.
+    戻り値は国 × 年 (YR2020, YR2021, ...) のワイド形式。output_file を指定すると CSV にも保存する。
     """
 
     # Process indicators
@@ -49,47 +53,41 @@ def fetch_worldbank_data(
     print(f"Fetching World Bank Data for indicators: {indicators}...")
     print(f"Countries: {countries}")
 
-    try:
-        # Determine time range. A partial range (only one of start/end) must be
-        # honored, not silently widened to 'all'. World Bank series start ~1960;
-        # there is no future data, so an open upper bound is clamped to the data.
-        if start_year or end_year:
-            lo = int(start_year) if start_year else 1960
-            hi = int(end_year) if end_year else 2100
-            time_range = range(lo, hi + 1)
-        else:
-            time_range = 'all'
+    # Determine time range. A partial range (only one of start/end) must be
+    # honored, not silently widened to 'all'. World Bank series start ~1960;
+    # there is no future data, so an open upper bound is clamped to the data.
+    if start_year or end_year:
+        lo = int(start_year) if start_year else 1960
+        hi = int(end_year) if end_year else 2100
+        time_range = range(lo, hi + 1)
+    else:
+        time_range = 'all'
 
-        # Fetching
-        # labels=True adds Country Name column.
-        df = wb.data.DataFrame(indicators, economy=countries, time=time_range, labels=True)  # noqa: E501
+    # Fetching
+    # labels=True adds Country Name column.
+    pdf = wb.data.DataFrame(indicators, economy=countries, time=time_range, labels=True)  # noqa: E501
 
-        # Reset index to make Economy (Country Code) a column
-        df.reset_index(inplace=True)
+    # Reset index to make Economy (Country Code) a column
+    pdf.reset_index(inplace=True)
 
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching World Bank data: {e}")
-        return
-
-    if df.empty:
+    if pdf.empty:
         print("No data found.")
-        return
+        return pl.DataFrame()
 
-    # Output filename
-    if not output_file:
-        # Create a safe filename from indicators
-        safe_inds = "_".join([k for k,v in INDICATORS.items() if v in indicators][:3])
-        if not safe_inds:
-            safe_inds = "custom_indicators"
-        output_file = f"wb_{safe_inds}.csv"
+    # pyarrow 非依存で変換する（pl.from_pandas は文字列列に pyarrow を要する）。NaN は null にそろえる。
+    df = pl.DataFrame(pdf.to_dict(orient="list")).fill_nan(None)
 
-    print(f"Saving to {output_file}...")
-    try:
-        df.to_csv(output_file, index=False, encoding='utf-8-sig')
-    except Exception as e:  # noqa: BLE001
-        print(f"Error saving CSV: {e}")
+    save_output(df, output_file)
+    return df
 
-    print("Done.")
+
+def _default_output_file(indicators: str) -> str:
+    """CLI 用の既定出力ファイル名（エイリアス名から作る）。"""
+    codes = {INDICATORS.get(i.strip().lower(), i.strip()) for i in indicators.split(',')}
+    safe_inds = "_".join([k for k, v in INDICATORS.items() if v in codes][:3])
+    if not safe_inds:
+        safe_inds = "custom_indicators"
+    return f"wb_{safe_inds}.csv"
 
 def search_indicators(query: str) -> None:
     """
@@ -103,7 +101,7 @@ def list_aliases() -> None:
     for alias, code in INDICATORS.items():
         print(f"  {alias.ljust(15)} : {code}")
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch World Bank / SDG Data.")
     parser.add_argument("--indicators", help="Indicator Codes or Aliases (comma-separated). e.g., 'gdp,population' or 'NY.GDP.MKTP.CD'")  # noqa: E501
     parser.add_argument("--countries", default="all", help="Country Codes (ISO3, comma-separated). Default: 'all'. e.g., 'JPN,USA,CHN,WLD'")  # noqa: E501
@@ -120,7 +118,11 @@ if __name__ == "__main__":
     elif args.search:
         search_indicators(args.search)
     elif args.indicators:
-        fetch_worldbank_data(args.indicators, args.countries, args.start, args.end, args.out)  # noqa: E501
+        fetch_worldbank_data(args.indicators, args.countries, args.start, args.end,
+                             args.out or _default_output_file(args.indicators))
     else:
-        print("Error: One of --indicators, --search, or --list is required.")
-        parser.print_help()
+        parser.error("One of --indicators, --search, or --list is required.")
+
+
+if __name__ == "__main__":
+    cli_entry(main)

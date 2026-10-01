@@ -1,10 +1,13 @@
 import argparse
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが zipcode_fetcher.requests.get を patch する
+
+from api_utils import cli_entry, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 
-def fetch_zipcode(zipcode: str, output_file: str | None = None) -> None:
+def fetch_zipcode(zipcode: str, output_file: str | None = None) -> pl.DataFrame:
     """
     Fetches address information from a zipcode using ZipCloud API.
     No API key required.
@@ -13,36 +16,31 @@ def fetch_zipcode(zipcode: str, output_file: str | None = None) -> None:
     params = {"zipcode": zipcode}
 
     print(f"Searching address for zipcode: {zipcode}...")
-    try:
-        response = requests.get(base_url, params=params)  # noqa: S113
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching zipcode data: {e}")
-        return
+    response = _get_with_retry(base_url, params=params)
+    data = response.json()
 
-    if data.get('status') != 200:  # noqa: PLR2004
-        print(f"API Error: {data.get('message')}")
-        return
+    # ZipCloud はエラーも HTTP 200 + status (400: 入力エラー / 500: サーバエラー) で返す。
+    status = data.get('status')
+    if status != 200:  # noqa: PLR2004
+        exc = ValueError if status == 400 else RuntimeError  # noqa: PLR2004
+        raise exc(f"ZipCloud API error (status={status}): {data.get('message')}")
 
     results = data.get('results')
     if not results:
         print("No address found for this zipcode.")
-        return
+        return pl.DataFrame()
 
     df = pl.DataFrame(results)
+    save_output(df, output_file)
+    return df
 
-    if not output_file:
-        output_file = f"address_{zipcode}.csv"
-
-    print(f"Saving to {output_file}...")
-    df.write_csv(output_file, include_header=True)
-    print("Done.")
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch address from zipcode (ZipCloud).")  # noqa: E501
     parser.add_argument("zipcode", help="7-digit zipcode (e.g., 1000001)")
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_zipcode(args.zipcode, args.out)
+    fetch_zipcode(args.zipcode, args.out or f"address_{args.zipcode}.csv")
+
+if __name__ == "__main__":
+    cli_entry(main)

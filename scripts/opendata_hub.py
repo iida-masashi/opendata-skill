@@ -1,6 +1,6 @@
-import importlib.util
-import os
-import uuid
+import importlib
+import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
@@ -9,6 +9,21 @@ from typing import Any
 import polars as pl
 
 from .cache_manager import CacheManager
+
+logger = logging.getLogger(__name__)
+
+# フェッチャーは `from api_utils import ...` / `from fred_fetcher import ...` のように
+# scripts/ 直下をトップレベルとして import する。Hub をライブラリとして使う場合でも
+# 解決できるよう、scripts/ を import パスに載せる。
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+# フェッチャーが送出するのはトップレベル `api_utils` のクラス。`scripts.api_utils` から import すると
+# 別モジュール扱いで別クラスになり except で捕まらないため、利用者向けにここから公開する。
+from api_utils import MissingApiKeyError  # noqa: E402
+
+__all__ = ["MissingApiKeyError", "OpenDataHub"]
 
 
 class OpenDataHub:
@@ -19,9 +34,11 @@ class OpenDataHub:
     """
 
     def __init__(self, cache_dir: str = ".cache") -> None:
-        self.scripts_dir: Path = Path(__file__).resolve().parent
+        self.scripts_dir: Path = _SCRIPTS_DIR
         self.fetchers: dict[str, Path] = self._discover_fetchers()
         self.cache = CacheManager(cache_dir=cache_dir)
+        # 直近の get_many で失敗したラベル → 例外（失敗と「データ0件」を区別するため）
+        self.last_errors: dict[str, Exception] = {}
 
     def _discover_fetchers(self) -> dict[str, Path]:
         """scripts ディレクトリ内のフェッチャーを自動検出するわ"""
@@ -32,21 +49,16 @@ class OpenDataHub:
         return fetchers
 
     def _load_module(self, name: str) -> ModuleType:
-        """フェッチャーモジュールを動的にロードするわ"""
+        """フェッチャーモジュールを import する（sys.modules にキャッシュされ、2回目以降は再実行しない）。
+
+        再実行するとモジュール状態（rate_limited の実行枠など）が毎回リセットされるため、
+        通常の import でロードする。
+        """
         if name not in self.fetchers:
             raise ValueError(
                 f"❌ Unknown fetcher: {name}. Available: {list(self.fetchers.keys())}"
             )
-
-        spec = importlib.util.spec_from_file_location(
-            f"opendata_{name}", self.fetchers[name]
-        )
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Could not load spec for {name}")
-
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        return importlib.import_module(self.fetchers[name].stem)
 
     def get_many(
         self, specs: list[dict[str, Any]], max_workers: int = 8
@@ -56,74 +68,55 @@ class OpenDataHub:
         specs: [{"label": str, "method": "get_xxx", "kwargs": {...}}, ...]
         戻り値: {label: DataFrame}。個々の失敗は隔離し、その label は空DFになる
         （1ソースのAPI障害が全体を巻き込まないようにする）。
+        失敗したラベルと例外は self.last_errors に入る（空DFが「0件」か「失敗」かはここで区別する）。
         """
-        def _run(spec: dict[str, Any]) -> tuple[str, pl.DataFrame]:
+        def _run(spec: dict[str, Any]) -> tuple[str, pl.DataFrame, Exception | None]:
             label = spec["label"]
             try:
                 fn = getattr(self, spec["method"])
                 df = fn(**spec.get("kwargs", {}))
-                return label, df if isinstance(df, pl.DataFrame) else pl.DataFrame()
+                return label, df if isinstance(df, pl.DataFrame) else pl.DataFrame(), None
             except Exception as e:  # noqa: BLE001 - 失敗を隔離して全体を守る
-                print(f"[get_many] '{label}' ({spec.get('method')}) failed: {e}")
-                return label, pl.DataFrame()
+                logger.error("[get_many] '%s' (%s) failed: %s", label, spec.get("method"), e)
+                return label, pl.DataFrame(), e
 
         results: dict[str, pl.DataFrame] = {}
+        errors: dict[str, Exception] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for label, df in ex.map(_run, specs):
+            for label, df, err in ex.map(_run, specs):
                 results[label] = df
+                if err is not None:
+                    errors[label] = err
+        self.last_errors = errors
         return results
 
     def get_weather(self, lat: float, lon: float, **kwargs: Any) -> pl.DataFrame:
         """気象データを取得するわ (Open-Meteo)"""
-        params = {"lat": lat, "lon": lon, **kwargs}
-        cached = self.cache.get("weather", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "meteo", "fetch_open_meteo",
-            {"latitude": lat, "longitude": lon, **kwargs}, "temp_weather.csv",
+        return self._cached_fetch(
+            "meteo", "fetch_open_meteo", "weather",
+            {"lat": lat, "lon": lon, **kwargs}, 24,
+            {"latitude": lat, "longitude": lon, **kwargs},
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("weather", params, df, ttl_hours=24)
-        return df
 
     def get_economic(
         self, indicators: list[str], countries: str = "all", **kwargs: Any
     ) -> pl.DataFrame:
         """世界銀行から経済指標を取得するわ"""
-        params = {"indicators": sorted(indicators), "countries": countries, **kwargs}
-        cached = self.cache.get("worldbank", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "worldbank", "fetch_worldbank_data",
-            {"indicators": indicators, "countries": countries, **kwargs}, "temp_econ.csv",
+        return self._cached_fetch(
+            "worldbank", "fetch_worldbank_data", "worldbank",
+            {"indicators": sorted(indicators), "countries": countries, **kwargs}, 168,  # 1 week
+            {"indicators": indicators, "countries": countries, **kwargs},
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("worldbank", params, df, ttl_hours=168) # 1 week
-        return df
 
     def get_trends(
         self, keywords: list[str], geo: str = "JP", **kwargs: Any
     ) -> pl.DataFrame:
         """Googleトレンドを取得するわ"""
-        params = {"keywords": sorted(keywords), "geo": geo, **kwargs}
-        cached = self.cache.get("trends", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "trends", "fetch_google_trends",
-            {"keywords": keywords, "geo": geo, **kwargs}, "temp_trends.csv",
+        return self._cached_fetch(
+            "trends", "fetch_google_trends", "trends",
+            {"keywords": sorted(keywords), "geo": geo, **kwargs}, 24,
+            {"keywords": keywords, "geo": geo, **kwargs},
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("trends", params, df, ttl_hours=24)
-        return df
 
     def get_freight(
         self,
@@ -133,20 +126,11 @@ class OpenDataHub:
         **kwargs: Any,
     ) -> pl.DataFrame:
         """物流・海運コスト指標を取得するわ"""
-        params = {"tickers": tickers, "start": start_date, "end": end_date, **kwargs}
-        cached = self.cache.get("freight", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "freight", "fetch_freight_data",
+        return self._cached_fetch(
+            "freight", "fetch_freight_data", "freight",
+            {"tickers": tickers, "start": start_date, "end": end_date, **kwargs}, 24,
             {"tickers": tickers, "start_date": start_date, "end_date": end_date, **kwargs},
-            "temp_freight.csv",
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("freight", params, df, ttl_hours=24)
-        return df
 
     def get_fred(
         self,
@@ -156,20 +140,11 @@ class OpenDataHub:
         **kwargs: Any,
     ) -> pl.DataFrame:
         """FREDからマクロ経済指標を取得するわ"""
-        params = {"id": series_id, "start": start_date, "end": end_date, **kwargs}
-        cached = self.cache.get("fred", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "fred", "fetch_fred_data",
+        return self._cached_fetch(
+            "fred", "fetch_fred_data", "fred",
+            {"id": series_id, "start": start_date, "end": end_date, **kwargs}, 168,
             {"series_id": series_id, "start_date": start_date, "end_date": end_date, **kwargs},
-            f"temp_fred_{series_id}.csv",
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("fred", params, df, ttl_hours=168)
-        return df
 
     def get_yahoo(
         self,
@@ -179,21 +154,11 @@ class OpenDataHub:
         **kwargs: Any,
     ) -> pl.DataFrame:
         """Yahoo Financeから市場データを取得するわ"""
-        params = {"symbol": symbol, "start": start_date, "end": end_date, **kwargs}
-        cached = self.cache.get("yahoo", params)
-        if cached is not None:
-            return cached
-
-        temp_csv = f"temp_yahoo_{symbol.replace('=', '_').replace('^', '_')}.csv"
-        df = self._fetch_to_df(
-            "yahoo", "fetch_yahoo_finance",
+        return self._cached_fetch(
+            "yahoo", "fetch_yahoo_finance", "yahoo",
+            {"symbol": symbol, "start": start_date, "end": end_date, **kwargs}, 12,  # Market data changes often
             {"tickers": symbol, "start_date": start_date, "end_date": end_date, **kwargs},
-            temp_csv,
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("yahoo", params, df, ttl_hours=12) # Market data changes often
-        return df
 
     def get_oecd(
         self,
@@ -204,21 +169,13 @@ class OpenDataHub:
         **kwargs: Any
     ) -> pl.DataFrame:
         """OECDから詳細な経済統計（QNA/SNA/MEI等）を取得するわ"""
-        params = {"dataset": dataset, "countries": countries, "start": start_year, "end": end_year, **kwargs}
-        cached = self.cache.get("oecd", params)
-        if cached is not None:
-            return cached
-
-        df = self._fetch_to_df(
-            "oecd", "fetch_oecd_data",
+        return self._cached_fetch(
+            "oecd", "fetch_oecd_data", "oecd",
+            {"dataset": dataset, "countries": countries, "start": start_year, "end": end_year, **kwargs},
+            720,  # 30 days
             {"dataset_code": dataset, "countries": countries,
              "start_year": start_year, "end_year": end_year, **kwargs},
-            f"temp_oecd_{dataset.lower()}.csv",
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("oecd", params, df, ttl_hours=720) # 30 days
-        return df
 
     def get_estat(
         self, stats_data_id: str, app_id: str | None = None, **kwargs: Any
@@ -229,21 +186,13 @@ class OpenDataHub:
         if cached is not None:
             return cached
 
-        try:
-            from api_utils import require_api_key
-        except ImportError:
-            from .api_utils import require_api_key
+        from api_utils import require_api_key
 
         app_id = app_id or require_api_key("ESTAT_API_KEY", "e-Stat", "https://www.e-stat.go.jp/api/")
-        df = self._fetch_to_df(
-            "estat", "fetch_estat_data",
+        return self._cached_fetch(
+            "estat", "fetch_estat_data", "estat", params, 720,
             {"app_id": app_id, "stats_data_id": stats_data_id, **kwargs},
-            f"temp_estat_{stats_data_id}.csv",
         )
-
-        if not self._is_degenerate(df):
-            self.cache.set("estat", params, df, ttl_hours=720)
-        return df
 
     INDUSTRY_COMMODITY_MAP = {
         "食品": ["ZC=F", "ZS=F", "KE=F", "USDJPY=X"],
@@ -334,14 +283,13 @@ class OpenDataHub:
         cache_key: str,
         cache_params: dict[str, Any],
         ttl_hours: int,
-        temp_csv: str,
         call_kwargs: dict[str, Any],
     ) -> pl.DataFrame:
-        """キャッシュ確認 → フェッチ（戻り値DF優先/CSVフォールバック）→ キャッシュ保存の共通処理"""
+        """キャッシュ確認 → フェッチ → キャッシュ保存の共通処理"""
         cached = self.cache.get(cache_key, cache_params)
         if cached is not None:
             return cached
-        df = self._fetch_to_df(module_name, fetcher_name, call_kwargs, temp_csv)
+        df = self._fetch_to_df(module_name, fetcher_name, call_kwargs)
         if not self._is_degenerate(df):
             self.cache.set(cache_key, cache_params, df, ttl_hours=ttl_hours)
         return df
@@ -351,7 +299,7 @@ class OpenDataHub:
         return self._cached_fetch(
             "pmi", "fetch_pmi_data", "pmi",
             {"series": series, **kwargs}, 168,
-            f"temp_pmi_{series}.csv", {"series": series, **kwargs},
+            {"series": series, **kwargs},
         )
 
     def get_comtrade(
@@ -365,7 +313,7 @@ class OpenDataHub:
                    "flow": flow, "period": period, **kwargs}
         return self._cached_fetch(
             "comtrade", "fetch_comtrade_data", "comtrade", cache_p, 720,
-            f"temp_comtrade_{reporter}_{partner}_{hs_code}.csv", call,
+            call,
         )
 
     def get_eia(self, series: str = "crude_stocks", **kwargs: Any) -> pl.DataFrame:
@@ -373,7 +321,7 @@ class OpenDataHub:
         return self._cached_fetch(
             "eia", "fetch_eia_data", "eia",
             {"series": series, **kwargs}, 24,
-            f"temp_eia_{series}.csv", {"series": series, **kwargs},
+            {"series": series, **kwargs},
         )
 
     def get_gdelt(self, query: str = "supply chain disruption", theme: str | None = None, **kwargs: Any) -> pl.DataFrame:
@@ -381,7 +329,7 @@ class OpenDataHub:
         return self._cached_fetch(
             "gdelt", "fetch_gdelt_data", "gdelt",
             {"query": query, "theme": theme, **kwargs}, 6,
-            "temp_gdelt.csv", {"query": query, "theme": theme, **kwargs},
+            {"query": query, "theme": theme, **kwargs},
         )
 
     def get_ais(self, port: str = "shanghai", provider: str = "auto", **kwargs: Any) -> pl.DataFrame:
@@ -389,7 +337,7 @@ class OpenDataHub:
         return self._cached_fetch(
             "ais", "fetch_ais_data", "ais",
             {"port": port, "provider": provider, **kwargs}, 2,
-            f"temp_ais_{port}.csv", {"port": port, "provider": provider, **kwargs},
+            {"port": port, "provider": provider, **kwargs},
         )
 
     def get_agri(self, source: str = "faostat", commodity: str = "corn", **kwargs: Any) -> pl.DataFrame:
@@ -397,7 +345,6 @@ class OpenDataHub:
         return self._cached_fetch(
             "usda", "fetch_agri_data", "usda",
             {"source": source, "commodity": commodity, **kwargs}, 720,
-            f"temp_agri_{source}_{commodity}.csv",
             {"source": source, "commodity": commodity, **kwargs},
         )
 
@@ -408,12 +355,12 @@ class OpenDataHub:
             return self._cached_fetch(
                 "semicon", "compute_book_to_bill", "semicon",
                 {"series": series, **kwargs}, 168,
-                f"temp_semi_{series}.csv", kwargs,
+                kwargs,
             )
         return self._cached_fetch(
             "semicon", "fetch_semicon_data", "semicon",
             {"series": series, **kwargs}, 168,
-            f"temp_semi_{series}.csv", {"series": series, **kwargs},
+            {"series": series, **kwargs},
         )
 
     def get_entsoe(self, data_type: str = "load_actual", country: str = "DE", **kwargs: Any) -> pl.DataFrame:
@@ -421,7 +368,7 @@ class OpenDataHub:
         call = {"data_type": data_type, "country": country, **kwargs}
         return self._cached_fetch(
             "entsoe", "fetch_entsoe_data", "entsoe", call, 6,
-            f"temp_entsoe_{country}_{data_type}.csv", call,
+            call,
         )
 
     def get_usgs_earthquakes(self, min_magnitude: float = 4.5, **kwargs: Any) -> pl.DataFrame:
@@ -429,7 +376,7 @@ class OpenDataHub:
         return self._cached_fetch(
             "usgs", "fetch_usgs_earthquakes", "usgs",
             {"min_mag": min_magnitude, **kwargs}, 1,
-            "temp_usgs.csv", {"min_magnitude": min_magnitude, **kwargs},
+            {"min_magnitude": min_magnitude, **kwargs},
         )
 
     def get_firms(self, region: str = "us_west", source: str = "viirs_n", **kwargs: Any) -> pl.DataFrame:
@@ -437,7 +384,7 @@ class OpenDataHub:
         call = {"region": region, "source": source, **kwargs}
         return self._cached_fetch(
             "firms", "fetch_firms_data", "firms", call, 3,
-            f"temp_firms_{region}.csv", call,
+            call,
         )
 
     def get_official_fx(self, source: str = "ecb", currency: str = "JPY", **kwargs: Any) -> pl.DataFrame:
@@ -445,7 +392,7 @@ class OpenDataHub:
         call = {"source": source, "currency": currency, **kwargs}
         return self._cached_fetch(
             "official_fx", "fetch_official_fx", "official_fx", call, 24,
-            f"temp_official_fx_{source}_{currency}.csv", call,
+            call,
         )
 
     def get_edinet_financials(self, edinet_code: str, period: str = "annual", years: int | None = None, **kwargs: Any) -> pl.DataFrame:
@@ -453,7 +400,7 @@ class OpenDataHub:
         call = {"edinet_code": edinet_code, "period": period, "years": years, **kwargs}
         return self._cached_fetch(
             "edinet", "fetch_edinet_financials", "edinet_financials", call, 24,
-            f"temp_edinet_{edinet_code}_{period}.csv", call,
+            call,
         )
 
     def get_edinet_ratios(self, edinet_code: str, **kwargs: Any) -> pl.DataFrame:
@@ -461,7 +408,7 @@ class OpenDataHub:
         call = {"edinet_code": edinet_code, **kwargs}
         return self._cached_fetch(
             "edinet", "fetch_edinet_ratios", "edinet_ratios", call, 24,
-            f"temp_edinet_ratios_{edinet_code}.csv", call,
+            call,
         )
 
     # ========================================================================
@@ -473,7 +420,7 @@ class OpenDataHub:
         call = {"series": series, **kwargs}
         return self._cached_fetch(
             "boj", "fetch_boj_data", "boj", call, 168,
-            f"temp_boj_{series}.csv", call,
+            call,
         )
 
     def get_keiki_di(self, **kwargs: Any) -> pl.DataFrame:
@@ -526,66 +473,30 @@ class OpenDataHub:
         return df.rename(mapping) if mapping else df
 
     def _fetch_to_df(
-        self, module_name: str, fetcher_name: str, call_kwargs: dict[str, Any], temp_csv: str
+        self, module_name: str, fetcher_name: str, call_kwargs: dict[str, Any]
     ) -> pl.DataFrame:
-        """フェッチャーを呼び、戻り値の DataFrame を優先消費する。
+        """フェッチャーを呼び、戻り値の DataFrame を正規化して返す。
 
-        戻り値が None のフェッチャー（CSV書き出しのみ）の場合だけ temp CSV に
-        フォールバックする。戻り値経由なら CSV ラウンドトリップの型喪失
-        （日付→文字列化など）を避けられる。
-
-        temp_csv は呼び出し側の固定名を信用せず、毎回ユニーク化する。get_many の
-        並列実行で同名フェッチャーが共有CWDの同じ一時ファイルを取り合う競合
-        （片方が他方のデータを読む/片方が空になる）を防ぐ。
+        フェッチャーは DataFrame を返す契約（CSV は書かせない）。None 等が返ったら
+        「データ無し」と区別できなくなるので TypeError にする。
         """
-        stem = os.path.basename(temp_csv).removesuffix(".csv")
-        temp_csv = f"{stem}_{uuid.uuid4().hex}.csv"
-
         m = self._load_module(module_name)
         fetcher = getattr(m, fetcher_name)
-        result = fetcher(output_file=temp_csv, **call_kwargs)
-
-        df = self._coerce_to_polars(result)
-        if df is not None:
-            # 戻り値を採用。CSV を書いていたら掃除する。
-            if os.path.exists(temp_csv):
-                os.remove(temp_csv)
-            return self._normalize_df(df)
-
-        # None 戻り → CSV フォールバック
-        return self._csv_to_df(temp_csv)
+        result = fetcher(**call_kwargs)
+        return self._normalize_df(self._coerce_to_polars(result, f"{module_name}.{fetcher_name}"))
 
     @staticmethod
-    def _coerce_to_polars(result: Any) -> pl.DataFrame | None:
-        """フェッチャー戻り値を pl.DataFrame に正規化する。None/空でない場合のみ返す。"""
-        if result is None:
-            return None
+    def _coerce_to_polars(result: Any, where: str = "fetcher") -> pl.DataFrame:
+        """フェッチャー戻り値を pl.DataFrame に正規化する（pandas も受け付ける）。"""
         if isinstance(result, pl.DataFrame):
-            return result if not result.is_empty() else None
+            return result
         # pandas DataFrame のダックタイピング（yfinance系）
         if hasattr(result, "to_dict") and hasattr(result, "empty"):
             if result.empty:
-                return None
+                return pl.DataFrame()
             try:
                 return pl.from_pandas(result)
             except Exception:  # noqa: BLE001
                 # pyarrow 不在等で from_pandas が失敗する場合は dict 経由で変換
                 return pl.DataFrame({str(k): list(v.values()) for k, v in result.to_dict().items()})
-        return None
-
-    def _csv_to_df(self, path: str) -> pl.DataFrame:
-        """一時 CSV を Polars DF に変換して削除するわ。カラム名の標準化も行うわよ。
-
-        ファイルが存在しない場合のみ「データ無し」として空DFを返す。
-        ファイルは在るのにパースに失敗した場合は、空データと誤認させず例外を送出する
-        （取得失敗を黙って欠損covariateに化けさせない）。
-        """
-        if not os.path.exists(path):
-            return pl.DataFrame()
-
-        try:
-            df = pl.read_csv(path)
-            return self._normalize_df(df)
-        finally:
-            if os.path.exists(path):
-                os.remove(path)
+        raise TypeError(f"{where} must return a DataFrame, got {type(result).__name__}")

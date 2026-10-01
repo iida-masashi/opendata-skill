@@ -2,8 +2,12 @@ import argparse
 from datetime import UTC, datetime
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが <module>.requests.get を patch する
 from dotenv import load_dotenv
+
+from api_utils import cli_entry, redact, require_api_key, save_output
+from api_utils import get_with_retry as _get_with_retry
+from api_utils import get_with_retry_redacted as _get_redacted
 
 load_dotenv()
 
@@ -33,6 +37,9 @@ FAOSTAT_DOMAIN = {
     "food_security": "FS",      # Suite of Food Security Indicators
 }
 
+SOURCES = ("usda", "faostat")
+
+
 
 def fetch_usda_quickstats(
     commodity: str,
@@ -41,11 +48,6 @@ def fetch_usda_quickstats(
     statistic: str = "PRODUCTION",
 ) -> pl.DataFrame:
     """USDA NASS Quick Stats から米国農業統計を取得"""
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
     api_key = require_api_key("USDA_API_KEY", "USDA NASS", "https://quickstats.nass.usda.gov/api")
 
     comm = USDA_COMMODITY_ALIAS.get(commodity.lower(), commodity.upper())
@@ -61,9 +63,10 @@ def fetch_usda_quickstats(
         "format": "JSON",
     }
 
-    response = requests.get(USDA_QS, params=params, timeout=60)
-    response.raise_for_status()
+    response = _get_redacted(USDA_QS, [api_key], params=params)
     data = response.json()
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(f"USDA QuickStats API error: {redact(str(data['error']), [api_key])}")
     rows = data.get("data", [])
     if not rows:
         return pl.DataFrame()
@@ -90,8 +93,7 @@ def fetch_faostat(
     if element:
         params["element"] = element
 
-    response = requests.get(url, params=params, timeout=120)
-    response.raise_for_status()
+    response = _get_with_retry(url, params=params, timeout=120)
     data = response.json()
     rows = data.get("data", [])
     if not rows:
@@ -112,34 +114,28 @@ def fetch_agri_data(
     - source: 'usda' (米国詳細) / 'faostat' (グローバル)
     - commodity: 'corn', 'wheat', 'soybean', 'rice', 'cotton' etc.
     """
+    if source.lower() not in SOURCES:
+        raise ValueError(f"Unknown source: {source}. Available: {list(SOURCES)}")
+
     print(f"Fetching agricultural data: source={source}, commodity={commodity}, area={area}...")
-    try:
-        if source.lower() == "usda":
-            df = fetch_usda_quickstats(commodity=commodity, year=year)
-        else:
-            # FAOSTATではitem名を英語で渡す必要があるが、ALLを許容
-            item_code = commodity if commodity != "all" else "all"
-            df = fetch_faostat(
-                domain=domain,
-                area=area,
-                item=item_code,
-                year=year or "2020,2021,2022,2023",
-            )
+    if source.lower() == "usda":
+        df = fetch_usda_quickstats(commodity=commodity, year=year)
+    else:
+        # FAOSTATではitem名を英語で渡す必要があるが、ALLを許容
+        item_code = commodity if commodity != "all" else "all"
+        df = fetch_faostat(
+            domain=domain,
+            area=area,
+            item=item_code,
+            year=year or "2020,2021,2022,2023",
+        )
 
-        if df.is_empty():
-            print("No agricultural data found.")
-            return df
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
+    if df.is_empty():
+        print("No agricultural data found.")
         return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text if e.response else str(e)}")
-        return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching agricultural data: {e}")
-        return pl.DataFrame()
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -162,4 +158,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

@@ -19,7 +19,7 @@ def fetch_maff_market(date: str, market_code: str = "all", item_code: str = "all
     It often redirects to e-Stat.
     
     Let's implement a scraper for the "Daily Market Results" (日報) from the Tokyo Metropolitan Central Wholesale Market website as a proxy for "MAFF data" since it's the most requested.
-    Actually, let's stick to the official MAFF e-Stat endpoint via fetch_estat.py if possible.
+    Actually, let's stick to the official MAFF e-Stat endpoint via estat_fetcher.py if possible.
     
     However, for this "MAFF" specific script, let's target the "Wholesale Market Information" which might not be on e-Stat daily.
     
@@ -29,7 +29,7 @@ def fetch_maff_market(date: str, market_code: str = "all", item_code: str = "all
     as MAFF's direct API is often just a CKAN catalog.
     
     BUT, there is a "MAFF Open Data Portal": https://www.maff.go.jp/j/tokei/opendata/
-    It uses CKAN. So we can use `fetch_ckan.py`!
+    It uses CKAN. So we can use `ckan_fetcher.py`!
     
     "Is there a specific API for prices?" -> Yes, ALIC or specialized sites.
     
@@ -45,7 +45,7 @@ def fetch_maff_market(date: str, market_code: str = "all", item_code: str = "all
     print("Note: MAFF data is best accessed via e-Stat (for statistics) or the MAFF Open Data Portal (CKAN).")  # noqa: E501
     print("This script will search the MAFF CKAN portal for the specified keywords.")
 
-    # We can reuse the logic from fetch_ckan.py but targeting MAFF's specific portal URL if it exists,  # noqa: E501
+    # We can reuse the logic from ckan_fetcher.py but targeting MAFF's specific portal URL if it exists,  # noqa: E501
     # or just e-Gov with "MAFF" organization filter.
 
     # For now, let's implement a specific scraper for "Tokyo Central Wholesale Market" daily data  # noqa: E501
@@ -54,11 +54,11 @@ def fetch_maff_market(date: str, market_code: str = "all", item_code: str = "all
     # This might be too fragile.
 
     # Let's stick to the "e-Stat" guidance.
-    print("Redirecting to fetch_estat.py for robust data retrieval...")
-    print("Please use: python opendata-skill/scripts/fetch_estat.py --statsDataId <ID>")
+    print("Redirecting to estat_fetcher.py for robust data retrieval...")
+    print("Please use: python scripts/estat_fetcher.py --statsDataId <ID>")
     print("Example IDs:")
     print(" - 0002060001: Vegetable Wholesale Market Survey")
     print(" - 0002060002: Fruit Wholesale Market Survey")
 
 if __name__ == "__main__":
-    print("This script is a placeholder. Please use fetch_estat.py or fetch_ckan.py for MAFF data.")  # noqa: E501
+    print("This script is a placeholder. Please use estat_fetcher.py or ckan_fetcher.py for MAFF data.")  # noqa: E501

@@ -1,10 +1,13 @@
 import argparse
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが jshis_fetcher.requests.get を patch する
+
+from api_utils import cli_entry, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 
-def fetch_jshis_risk(lat: float, lon: float, output_file: str | None = None) -> None:
+def fetch_jshis_risk(lat: float, lon: float, output_file: str | None = None) -> pl.DataFrame:
     """
     Fetches Earthquake Hazard Risk from J-SHIS API (NIED).
     Specifically, probability of seismic intensity >= 6-lower within 30 years.
@@ -32,18 +35,13 @@ def fetch_jshis_risk(lat: float, lon: float, output_file: str | None = None) -> 
 
     print(f"Fetching J-SHIS Earthquake Risk for Lat: {lat}, Lon: {lon}...")
 
-    try:
-        response = requests.get(base_url, params=params)  # noqa: S113
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching J-SHIS data: {e}")
-        return
+    response = _get_with_retry(base_url, params=params)
+    data = response.json()
 
     features = data.get('features', [])
     if not features:
         print("No data found for this location.")
-        return
+        return pl.DataFrame()
 
     # Extract properties
     props = features[0].get('properties', {})
@@ -66,15 +64,10 @@ def fetch_jshis_risk(lat: float, lon: float, output_file: str | None = None) -> 
     }
 
     df = pl.DataFrame([risk_data])
-
-    if not output_file:
-        output_file = f"jshis_risk_{lat}_{lon}.csv"
-
-    print(f"Saving to {output_file}...")
-    df.write_csv(output_file, include_header=True)
-    print("Done.")
+    save_output(df, output_file)
     print("Risk Probabilities (30 Years):")
     print(df)
+    return df
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Earthquake Risk (J-SHIS).")
@@ -83,7 +76,7 @@ def main() -> None:
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_jshis_risk(args.lat, args.lon, args.out)
+    fetch_jshis_risk(args.lat, args.lon, args.out or f"jshis_risk_{args.lat}_{args.lon}.csv")
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

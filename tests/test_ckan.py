@@ -1,10 +1,9 @@
 """Tests for ckan_fetcher.py (CKAN open data portal search)."""
-import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import pytest
 
 from ckan_fetcher import search_ckan
 
@@ -77,32 +76,35 @@ def test_search_no_results_no_csv(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_get.return_value = mock_response
 
     out = str(tmp_path / "ckan_empty.csv")
-    search_ckan("https://data.e-gov.go.jp/data", "NOTFOUND", output_file=out)
+    df = search_ckan("https://data.e-gov.go.jp/data", "NOTFOUND", output_file=out)
 
+    assert df.is_empty()  # 正常応答で0件は空DF（失敗ではない）
     assert not Path(out).exists()
 
 
 @patch("ckan_fetcher.requests.get")
-def test_search_api_failure_no_csv(mock_get: MagicMock, tmp_path: Path) -> None:
-    """CKAN APIがsuccess=Falseのときはファイルを生成しない。"""
+def test_search_api_failure_raises(mock_get: MagicMock, tmp_path: Path) -> None:
+    """CKAN APIがsuccess=Falseのときは例外にする（以前は空で返っていた）。"""
     mock_response = MagicMock()
-    mock_response.json.return_value = {"success": False}
+    mock_response.json.return_value = {"success": False, "error": {"message": "Search error"}}
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
     out = str(tmp_path / "ckan_fail.csv")
-    search_ckan("https://data.e-gov.go.jp/data", "query", output_file=out)
+    with pytest.raises(RuntimeError, match="Search error"):
+        search_ckan("https://data.e-gov.go.jp/data", "query", output_file=out)
 
     assert not Path(out).exists()
 
 
 @patch("ckan_fetcher.requests.get")
-def test_search_network_error_no_crash(mock_get: MagicMock, tmp_path: Path) -> None:
-    """ネットワークエラー時にクラッシュしない。"""
-    mock_get.side_effect = Exception("Network error")
+def test_search_network_error_raises(mock_get: MagicMock, tmp_path: Path) -> None:
+    """ネットワークエラーは握り潰さず送出する。"""
+    mock_get.side_effect = ValueError("Network error")
 
     out = str(tmp_path / "ckan_net.csv")
-    search_ckan("https://data.e-gov.go.jp/data", "query", output_file=out)
+    with pytest.raises(ValueError, match="Network error"):
+        search_ckan("https://data.e-gov.go.jp/data", "query", output_file=out)
 
     assert not Path(out).exists()
 
@@ -119,3 +121,22 @@ def test_search_constructs_correct_api_url(mock_get: MagicMock, tmp_path: Path) 
 
     called_url = mock_get.call_args[0][0]
     assert "package_search" in called_url
+
+
+@patch("ckan_fetcher.requests.get")
+def test_search_null_organization_and_format(mock_get: MagicMock) -> None:
+    """organization / format が null のパッケージで AttributeError にならない。"""
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"success": True, "result": {"results": [
+        {"title": "No org", "organization": None, "resources": [
+            {"name": "r0", "format": None, "url": "https://example.com/a"},
+            {"name": "r1", "format": "csv", "url": "https://example.com/b.csv"},
+        ]},
+    ]}}
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    df = search_ckan("https://data.e-gov.go.jp/data", "x")
+
+    assert df["Organization"].to_list() == [None]
+    assert df["URL"].to_list() == ["https://example.com/b.csv"]

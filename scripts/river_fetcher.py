@@ -1,7 +1,10 @@
 import argparse
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが river_fetcher.requests.get を patch する
+
+from api_utils import cli_entry, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 
 def fetch_river_discharge(
@@ -10,7 +13,7 @@ def fetch_river_discharge(
     output_file: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches River Discharge data from Open-Meteo Flood API.
     """
@@ -22,35 +25,28 @@ def fetch_river_discharge(
         "daily": "river_discharge"
     }
 
+    # 片方だけ指定すると黙って無視され既定期間が返っていたため、明示的に弾く。
+    if bool(start_date) != bool(end_date):
+        raise ValueError("start_date と end_date は両方指定するか、両方省略してください。")
     if start_date and end_date:
         params["start_date"] = start_date
         params["end_date"] = end_date
 
     print(f"Fetching River Discharge (Lat: {lat}, Lon: {lon})...")
 
-    try:
-        response = requests.get(base_url, params=params)  # noqa: S113
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching River data: {e}")
-        return
+    response = _get_with_retry(base_url, params=params)
+    data = response.json()
 
     daily_data = data.get('daily', {})
     if not daily_data:
         print("No river discharge data found nearby.")
-        return
+        return pl.DataFrame()
 
     df = pl.DataFrame(daily_data)
+    save_output(df, output_file)
+    return df
 
-    if not output_file:
-        output_file = f"river_discharge_{lat}_{lon}.csv"
-
-    print(f"Saving to {output_file}...")
-    df.write_csv(output_file, include_header=True)
-    print("Done.")
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch River Discharge (Open-Meteo Flood API).")  # noqa: E501
     parser.add_argument("--lat", required=True, type=float, help="Latitude")
     parser.add_argument("--lon", required=True, type=float, help="Longitude")
@@ -59,4 +55,8 @@ if __name__ == "__main__":
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_river_discharge(args.lat, args.lon, args.out, args.start, args.end)
+    output_file = args.out or f"river_discharge_{args.lat}_{args.lon}.csv"
+    fetch_river_discharge(args.lat, args.lon, output_file, args.start, args.end)
+
+if __name__ == "__main__":
+    cli_entry(main)

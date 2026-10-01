@@ -1,7 +1,7 @@
 # 要件定義書
 
 **システム名**: opendata-skill
-**バージョン**: 2.2.0 (Robustness & JP Leading Indicators)
+**バージョン**: 2.3.0 (Fail-Loud Refactor)
 **作成日**: 2026-04-18（最終更新: 2026-06-27）
 **対象リポジトリ**: `opendata-skill`（単独リポジトリ）
 
@@ -131,7 +131,7 @@ Polars DataFrame 返却（オプションで CSV 出力）
 | F-HUB-05 | グローバルマクロプリセット | 米・中・欧・日の主要マクロ指標をワンクリックで取得 |
 | F-HUB-06 | 戻り値DF優先消費 | `_fetch_to_df()` がフェッチャーの戻り値 DataFrame を優先消費し、`None` 返しのみ temp CSV へフォールバック（CSV経由の型喪失＝日付の文字列化を回避）。temp名はユニーク化し並列実行時の競合を防ぐ |
 | F-HUB-07 | 非退化検証 | `_is_degenerate()`（空 / 全カラム全null）でない場合のみキャッシュ保存。誤データの固着を防止 |
-| F-HUB-08 | 並列ファンアウト | `get_many()` が複数ソースをスレッドプールで並列取得。個々の失敗は隔離し、その label は空DFを返す |
+| F-HUB-08 | 並列ファンアウト | `get_many()` が複数ソースをスレッドプールで並列取得。個々の失敗は隔離し、その label は空DFを返す。失敗したラベルと例外は `last_errors` に残す |
 
 ### 3.2 データ取得機能
 
@@ -173,7 +173,6 @@ Polars DataFrame 返却（オプションで CSV 出力）
 | 機能ID | データソース | スクリプト | 取得内容 |
 |---|---|---|---|
 | F-REG-01 | MLIT | `mlit_fetcher.py` | 不動産取引価格・地価公示 |
-| F-REG-02 | RESAS | `resas_fetcher.py` | 地域経済分析（人口動態・産業構造） |
 | F-REG-03 | PLATEAU | `plateau_fetcher.py` | 3D都市モデルメタデータ |
 | F-REG-04 | ODPT | `odpt_fetcher.py` | 公共交通オープンデータ |
 
@@ -182,7 +181,7 @@ Polars DataFrame 返却（オプションで CSV 出力）
 | 機能ID | データソース | スクリプト | 取得内容 |
 |---|---|---|---|
 | F-IND-01 | USDA / FAOSTAT | `usda_fetcher.py` | 米国/グローバル農業統計・食料需給バランス |
-| F-IND-02 | 半導体 (FRED経由) | `semicon_fetcher.py` | 出荷・在庫・Book-to-Bill 比 |
+| F-IND-02 | 半導体 (FRED経由) | `semicon_fetcher.py` | コンピュータ・電子製品製造業の出荷・受注・在庫・Book-to-Bill 比 |
 
 #### 3.2.6 グローバルリスク・補完（v2.1 新規）
 
@@ -237,7 +236,7 @@ Polars DataFrame 返却（オプションで CSV 出力）
 | 分類 | データソース | APIキー | 無料枠 |
 |---|---|---|---|
 | **不要** | GDELT, USGS, FAOSTAT, ECB, Frankfurter, Open-Meteo, ODPT, ZipCloud, PLATEAU, 祝日, GSI | なし | 無制限 |
-| **要登録・無料** | FRED, EIA, ENTSO-E, NASA FIRMS, USDA QuickStats, e-Stat, RESAS, MLIT, 国税庁 | `*_API_KEY` | 制限あり |
+| **要登録・無料** | FRED, EIA, ENTSO-E, NASA FIRMS, USDA QuickStats, e-Stat, MLIT, 国税庁 | `*_API_KEY` | 制限あり |
 | **要登録・有料** | xAI Grok, YouTube Data API | `*_API_KEY` | 制限あり |
 | **要契約** | UN Comtrade Premium, Datalastic AIS | `*_API_KEY` | 有料 |
 
@@ -304,13 +303,14 @@ uv run python scripts/{source}_fetcher.py --xxx --out output.csv
 
 | エラー種別 | 動作 |
 |---|---|
-| APIキー未設定 | 親切なメッセージ（取得URL含む）を stderr に出力 → `sys.exit(1)` |
+| APIキー未設定 | 取得URLを含むメッセージ付きで `MissingApiKeyError` を送出（CLI では `cli_entry` が stderr 出力＋終了コード1に変換） |
 | HTTP 4xx (429以外) | 非一時的エラー。リトライせず即送出（無駄なバックオフを避ける） |
 | HTTP 429 / 5xx | 一時的エラー。`tenacity` で最大5回リトライ（Exponential Backoff 2→10秒） |
 | 接続エラー・タイムアウト | 一時的エラー。同上のリトライ対象 |
 | プログラムエラー (KeyError等) | 非一時的。リトライせず即送出（バグを隠さない） |
-| CSVパース失敗（ファイルは存在） | **空DFに化けさせず例外を送出**。取得失敗を「データ無し」と誤認させない（v2.2で変更） |
-| 取得結果が空 / 全null | 退化データとしてキャッシュせず、空DFを返す（正当な「データ無し」） |
+| HTTP 200 で返るエラーペイロード | 検出して例外を送出（空DFに化けさせない） |
+| フェッチャーが DataFrame 以外を返す | `TypeError`（「データ無し」と区別できなくなるため） |
+| 取得結果が空 / 全null | 退化データとしてキャッシュせず、空DFを返す（API が正常応答で0件を返した場合のみ） |
 
 ---
 
@@ -383,7 +383,7 @@ pytest           # テストランナー
 
 本スキルは以下の第三者 API に依存しており、それらの可用性・レスポンス構造変更のリスクを負う。重要な業務利用には実API smoke test の定期実行を推奨する。
 
-- 政府機関: e-Stat, MLIT, RESAS, USGS, EIA, USDA, BOJ, ECB
+- 政府機関: e-Stat, MLIT, USGS, EIA, USDA, BOJ, ECB
 - 民間: Yahoo Finance, Google Trends, YouTube, xAI Grok, Datalastic
 - 国際機関: UN Comtrade, World Bank, OECD, FAOSTAT, ENTSO-E
 - NGO/研究: GDELT, NASA FIRMS, Open-Meteo
@@ -437,7 +437,6 @@ uv run python scripts/entsoe_fetcher.py --type day_ahead_price --country DE
 ```env
 # ── v1.x (既存) ─────────────────────────
 ESTAT_API_KEY=<e-Stat App ID>
-RESAS_API_KEY=<RESAS API Key>
 MLIT_API_KEY=<MLIT API Key>
 FRED_API_KEY=<FRED API Key>
 XAI_API_KEY=<xAI Grok API Key>
@@ -508,15 +507,12 @@ AISHUB_USERNAME=<AISHub username>           # optional
 
 | テスト種別 | 対象 | 方式 |
 |---|---|---|
-| **実APIテスト (キー不要)** | GDELT, USGS, ECB, Frankfurter, FAOSTAT | 実際にHTTP呼び出し |
-| **実APIテスト (キー設定済)** | PMI, Semicon (FRED経由) | 実際にFRED呼び出し |
-| **モックテスト** | Comtrade, EIA, AIS, ENTSO-E, FIRMS, USDA QS | `unittest.mock.patch` でHTTPレスポンス注入 |
+| **実APIテスト（`integration` マーカー、既定では除外）** | GDELT, USGS, ECB, Frankfurter, FAOSTAT, TEPCO, FRED(PMI/Semicon) | `uv run pytest tests/ -m integration` で実行 |
+| **モックテスト（既定）** | 全フェッチャー・Hub・time_align・分析モジュール | `unittest.mock.patch` でHTTPレスポンス注入。ネットワーク接続は conftest で禁止 |
 
 ### 11.2 テストカバレッジ
 
-- v2.1 までのフェッチャー: 111 テスト
-- v2.2 追加（バグ回帰 + Hub堅牢化/戻り値経路/並列/time_align/BOJ/JPプリセット）: 約55 テスト
-- 合計: **166 passed / 1 skipped (FAOSTAT 外部API一時障害)**
+- 既定の実行（モックのみ）: **368 passed**（integration 12件は除外）
 
 ### 11.3 CI/CD 想定
 
@@ -524,9 +520,8 @@ AISHUB_USERNAME=<AISHub username>           # optional
 uv run pytest tests/
 ```
 
-- 大半はモックテスト（`test_trends.py` 含め `unittest.mock` で HTTP を注入）でネットワーク不要
-- 一部の実APIテスト（FAOSTAT等）はネットワーク必須。外部API一時障害時は `@pytest.mark.skipif` 等でスキップ
-- `FRED_API_KEY` 無設定環境では該当する実APIテストがスキップ
+- 既定の実行はモックテストのみでネットワーク不要（`tests/conftest.py` が非 integration テストの接続を禁止）
+- 実APIテストは `-m integration` で実行。`FRED_API_KEY` 無設定環境では該当テストがスキップ
 
 ### 11.4 コード品質
 

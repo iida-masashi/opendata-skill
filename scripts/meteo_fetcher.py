@@ -3,20 +3,39 @@ from typing import Any
 
 import polars as pl
 import requests
-
-try:
-    from api_utils import retry_with_ratelimit
-except ImportError:
-    from .api_utils import retry_with_ratelimit
+from api_utils import cli_entry, format_http_error, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 
-@retry_with_ratelimit
-def _get_with_retry(url: str, **kwargs: Any) -> requests.Response:
-    """module の requests.get を呼びつつ 429/5xx で再試行する（テストは patch 可能なまま）。"""
-    kwargs.setdefault("timeout", 60)
-    resp = requests.get(url, **kwargs)
-    resp.raise_for_status()
-    return resp
+def apply_date_range(params: dict[str, Any], start_date: str | None, end_date: str | None) -> None:
+    """Open-Meteo 系 API の start_date/end_date を params に入れる（両方指定か両方省略のみ可）。
+
+    片方だけ渡すと Open-Meteo は 400 を返す。黙って捨てると既定期間のデータが
+    指定期間のものとして返ってしまうので、ValueError にする。
+    """
+    if bool(start_date) != bool(end_date):
+        raise ValueError(
+            "start_date と end_date は両方指定するか、両方省略してください "
+            f"(start_date={start_date!r}, end_date={end_date!r})"
+        )
+    if start_date and end_date:
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+
+
+def request_open_meteo(url: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+    """Open-Meteo 系 API を呼んで JSON を返す。エラーは理由 (reason) 付きで送出する。"""
+    try:
+        response = _get_with_retry(url, params=params, **kwargs)
+    except requests.exceptions.HTTPError as e:
+        # 400 の本文 {"error": true, "reason": "..."} に原因が入る
+        raise RuntimeError(f"Open-Meteo {format_http_error(e)}") from e
+    data = response.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected Open-Meteo response: {str(data)[:300]}")  # noqa: TRY004
+    if data.get("error"):
+        raise RuntimeError(f"Open-Meteo API error: {data.get('reason')}")
+    return data
 
 
 def fetch_open_meteo(
@@ -24,14 +43,24 @@ def fetch_open_meteo(
     longitude: float,
     output_file: str | None = None,
     historical: bool = False,
-    hourly: bool = True,
+    hourly: bool | None = None,
     daily: bool = False,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches weather data from Open-Meteo API.
+    - daily=True なら日次データ、それ以外は時間別データを返す（hourly 省略時は daily の逆）。
+      時間別と日次は行の粒度が違い1つの DataFrame に混ぜられないため、両方 True は ValueError。
+    - start_date / end_date は両方指定するか両方省略する。
     """
+    if hourly is None:
+        hourly = not daily
+    if hourly and daily:
+        raise ValueError("hourly と daily は同時に指定できません（どちらか一方を True にしてください）")
+    if not hourly and not daily:
+        raise ValueError("hourly か daily のどちらかを True にしてください")
+
     base_url = "https://api.open-meteo.com/v1/forecast"
     if historical:
         base_url = "https://archive-api.open-meteo.com/v1/archive"
@@ -44,73 +73,43 @@ def fetch_open_meteo(
         "current_weather": True
     }
 
-    if start_date and end_date:
-        params["start_date"] = start_date
-        params["end_date"] = end_date
+    apply_date_range(params, start_date, end_date)
 
     # Variables
-    hourly_vars = ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "showers", "snowfall", "weathercode", "cloudcover", "windspeed_10m"]  # noqa: E501
-    daily_vars = ["temperature_2m_max", "temperature_2m_min", "precipitation_sum", "rain_sum", "showers_sum", "snowfall_sum", "weathercode", "windspeed_10m_max"]  # noqa: E501
+    hourly_vars = ["temperature_2m", "relative_humidity_2m", "precipitation", "rain", "showers", "snowfall", "weathercode", "cloudcover", "windspeed_10m"]
+    daily_vars = ["temperature_2m_max", "temperature_2m_min", "precipitation_sum", "rain_sum", "showers_sum", "snowfall_sum", "weathercode", "windspeed_10m_max"]
 
-    if hourly:
-        params["hourly"] = ",".join(hourly_vars)
-    if daily:
-        params["daily"] = ",".join(daily_vars)
+    section = "daily" if daily else "hourly"
+    params[section] = ",".join(daily_vars if daily else hourly_vars)
 
-    print(f"Fetching weather data (Lat: {latitude}, Lon: {longitude})...")
-    try:
-        response = _get_with_retry(base_url, params=params)
-        data = response.json()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching data: {e}")
-        return
+    print(f"Fetching weather data (Lat: {latitude}, Lon: {longitude}, {section})...")
+    data = request_open_meteo(base_url, params)
 
-    # Process
-    if not output_file:
-        mode = "historical" if historical else "forecast"
-        output_file = f"meteo_{mode}_{latitude}_{longitude}.csv"
-
-    # Convert to DataFrame
     # Open-Meteo returns 'hourly': {'time': [...], 'temp': [...], ...}
-    # We need to flatten this.
+    if section not in data:
+        raise RuntimeError(f"Open-Meteo response has no '{section}' data (keys: {sorted(data)})")
 
-    dfs = []
+    df = pl.DataFrame(data[section]).with_columns(pl.lit(section).alias('type'))
 
-    if hourly and 'hourly' in data:
-        hourly_data = data['hourly']
-        df_hourly = pl.DataFrame(hourly_data)
-        df_hourly = df_hourly.with_columns(pl.lit('hourly').alias('type'))
-        dfs.append(df_hourly)
+    save_output(df, output_file)
+    return df
 
-    if daily and 'daily' in data:
-        daily_data = data['daily']
-        df_daily = pl.DataFrame(daily_data)
-        df_daily = df_daily.with_columns(pl.lit('daily').alias('type'))
-        dfs.append(df_daily)
-
-    if not dfs:
-        print("No hourly or daily data returned.")
-        return
-
-    # Combine or separate? Usually users want one CSV. But hourly/daily have different shapes.  # noqa: E501
-    # Let's prioritize hourly if both requested, or save separate files?
-    # Simplest is to save the main one requested. If both, maybe just hourly?
-    # Let's save hourly if present, else daily.
-
-    final_df = dfs[0]
-    print(f"Saving to {output_file}...")
-    final_df.write_csv(output_file, include_header=True)
-    print("Done.")
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch weather data from Open-Meteo.")
     parser.add_argument("--lat", required=True, type=float, help="Latitude")
     parser.add_argument("--lon", required=True, type=float, help="Longitude")
     parser.add_argument("--out", help="Output CSV filename")
-    parser.add_argument("--historical", action="store_true", help="Fetch historical data (archive API)")  # noqa: E501
-    parser.add_argument("--daily", action="store_true", help="Fetch daily data instead of hourly")  # noqa: E501
-    parser.add_argument("--start", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", help="End date (YYYY-MM-DD)")
+    parser.add_argument("--historical", action="store_true", help="Fetch historical data (archive API)")
+    parser.add_argument("--daily", action="store_true", help="Fetch daily data instead of hourly")
+    parser.add_argument("--start", help="Start date (YYYY-MM-DD). Use together with --end")
+    parser.add_argument("--end", help="End date (YYYY-MM-DD). Use together with --start")
 
     args = parser.parse_args()
-    fetch_open_meteo(args.lat, args.lon, args.out, args.historical, not args.daily, args.daily, args.start, args.end)  # noqa: E501
+    output_file = args.out
+    if not output_file:
+        mode = "historical" if args.historical else "forecast"
+        output_file = f"meteo_{mode}_{args.lat}_{args.lon}.csv"
+    fetch_open_meteo(args.lat, args.lon, output_file, args.historical, not args.daily, args.daily, args.start, args.end)
+
+if __name__ == "__main__":
+    cli_entry(main)

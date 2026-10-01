@@ -1,6 +1,6 @@
 [project]
 name = "opendata-skill"
-version = "2.2.1"
+version = "2.3.0"
 description = "Comprehensive Open Data Fetcher (Yahoo, WB, OECD, Weather)"
 authors = [{ name = "Masashi Iida" }]
 license = "MIT"
@@ -28,6 +28,10 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = ["integration: 実APIにアクセスするテスト（既定では除外。`-m integration` で実行）"]
+addopts = "-m 'not integration'"
 
 [dependency-groups]
 dev = [

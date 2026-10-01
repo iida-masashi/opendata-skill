@@ -3,12 +3,15 @@ import urllib.parse
 from typing import Any
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが ckan_fetcher.requests.get を patch する
+
+from api_utils import cli_entry, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 
 def search_ckan(
     base_url: str, query: str, rows: int = 10, output_file: str | None = None
-) -> None:
+) -> pl.DataFrame:
     """
     Searches a CKAN-based portal (like e-Gov Data Portal) for datasets.
     """
@@ -20,33 +23,28 @@ def search_ckan(
 
     print(f"Searching {base_url} for '{query}'...")
 
-    try:
-        response = requests.get(api_url, params=params, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print(f"Error searching CKAN: {e}")
-        return
+    response = _get_with_retry(api_url, params=params, timeout=30)
+    data = response.json()
 
     if not data.get("success"):
-        print("CKAN API Error: Request failed.")
-        return
+        raise RuntimeError(f"CKAN API error: {data.get('error')}")
 
     results: list[dict[str, Any]] = data.get("result", {}).get("results", [])
 
     if not results:
         print("No datasets found.")
-        return
+        return pl.DataFrame()
 
     print(f"Found {len(results)} datasets. Extracting CSV resources...")
 
     resource_list: list[dict[str, Any]] = []
     for package in results:
         pkg_title = package.get("title")
-        organization = package.get("organization", {}).get("title")
+        # organization / format は null で返ることがある。
+        organization = (package.get("organization") or {}).get("title")
 
-        for res in package.get("resources", []):
-            fmt = res.get("format", "").upper()
+        for res in package.get("resources") or []:
+            fmt = (res.get("format") or "").upper()
             if "CSV" in fmt:
                 resource_list.append(
                     {
@@ -62,26 +60,14 @@ def search_ckan(
 
     if not resource_list:
         print("No CSV resources found in the search results.")
-        return
+        return pl.DataFrame()
 
     df = pl.DataFrame(resource_list)
-
-    # Output filename
-    if not output_file:
-        safe_query = urllib.parse.quote(query, safe="")
-        output_file = f"ckan_search_{safe_query}.csv"
-
-    print(f"Saving resource list to {output_file}...")
-    try:
-        df.write_csv(output_file, include_header=True)
-    except Exception as e:
-        print(f"Error saving CSV: {e}")
-
-    print("Done. You can now download specific files using the URLs in the CSV.")
-    print("Example: curl -O <URL>")
+    save_output(df, output_file)
+    return df
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Search CKAN Open Data Portals (e.g., e-Gov)."
     )
@@ -99,4 +85,12 @@ if __name__ == "__main__":
     parser.add_argument("--out", help="Output CSV filename for the resource list")
 
     args = parser.parse_args()
-    search_ckan(args.url, args.query, args.rows, args.out)
+    output_file = args.out or f"ckan_search_{urllib.parse.quote(args.query, safe='')}.csv"
+    df = search_ckan(args.url, args.query, args.rows, output_file)
+    if not df.is_empty():
+        print("Done. You can now download specific files using the URLs in the CSV.")
+        print("Example: curl -O <URL>")
+
+
+if __name__ == "__main__":
+    cli_entry(main)

@@ -2,8 +2,11 @@ import argparse
 from io import StringIO
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが <module>.requests.get を patch する
 from dotenv import load_dotenv
+
+from api_utils import cli_entry, redact, require_api_key, save_output
+from api_utils import get_with_retry_redacted as _get_redacted
 
 load_dotenv()
 
@@ -33,7 +36,7 @@ RISK_REGIONS = {
 def fetch_firms_data(
     region: str = "us_west",
     source: str = "viirs_n",
-    day_range: int = 7,
+    day_range: int = 5,
     output_file: str | None = None,
 ) -> pl.DataFrame:
     """
@@ -41,13 +44,8 @@ def fetch_firms_data(
     無料APIキー: https://firms.modaps.eosdis.nasa.gov/api/map_key/
     - region: 事前定義リスクエリア / または bbox 'W,S,E,N' を直接指定
     - source: 'modis', 'viirs_s', 'viirs_n', 'landsat'
-    - day_range: 過去 N 日 (1-10)
+    - day_range: 過去 N 日 (1-5。FIRMS Area API の DAY_RANGE 仕様)
     """
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
     api_key = require_api_key(
         "NASA_FIRMS_API_KEY", "NASA FIRMS",
         "https://firms.modaps.eosdis.nasa.gov/api/map_key/"
@@ -56,63 +54,52 @@ def fetch_firms_data(
     bbox = RISK_REGIONS.get(region.lower(), region)
     sensor = SOURCES.get(source.lower(), source)
 
-    if day_range < 1 or day_range > 10:
-        day_range = 7
+    if not 1 <= day_range <= 5:
+        raise ValueError(f"day_range must be 1..5 (FIRMS Area API), got {day_range}")
 
     url = f"{BASE_URL}/{api_key}/{sensor}/{bbox}/{day_range}"
 
     print(f"Fetching NASA FIRMS: region={region}, sensor={sensor}, days={day_range}...")
-    try:
-        response = requests.get(url, timeout=120)
-        response.raise_for_status()
+    # MAP_KEY が URL パスに入るため、例外メッセージからは伏せる
+    response = _get_redacted(url, [api_key], timeout=120)
 
-        text = response.text
-        if not text or text.strip().startswith("Invalid"):
-            print(f"FIRMS API error: {text[:200]}")
-            return pl.DataFrame()
+    # 正常応答は latitude 列で始まる CSV。それ以外（"Invalid MAP_KEY." や
+    # "Exceeding allowed transaction limit." 等のエラー文・空ボディ）は HTTP 200 でも失敗とする。
+    text = response.text
+    header = text.lstrip().split("\n", 1)[0]
+    if "latitude" not in header:
+        raise RuntimeError(f"FIRMS API error: {redact(text[:200], [api_key]) or '(empty response)'}")
 
-        try:
-            df = pl.read_csv(StringIO(text))
-        except Exception:  # noqa: BLE001
-            print("FIRMS: empty or unparseable CSV.")
-            return pl.DataFrame()
+    df = pl.read_csv(StringIO(text))
 
-        if df.is_empty():
-            print("No fire hotspots detected.")
-            return df
-
-        # 標準化: 日付 + value（brightness or frp）
-        if "acq_date" in df.columns:
-            df = df.with_columns(pl.col("acq_date").alias("date"))
-        if "frp" in df.columns:  # Fire Radiative Power (主要強度指標)
-            df = df.with_columns(pl.col("frp").alias("value"))
-        elif "bright_ti4" in df.columns:
-            df = df.with_columns(pl.col("bright_ti4").alias("value"))
-
-        df = df.with_columns(
-            pl.lit(region).alias("region"),
-            pl.lit(sensor).alias("sensor"),
-        )
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-
-        print(f"[FIRMS] {df.height} fire hotspots detected in {region}.")
+    if df.is_empty():
+        print("No fire hotspots detected.")
         return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text[:300] if e.response else str(e)}")
-        return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching FIRMS data: {e}")
-        return pl.DataFrame()
+
+    # 標準化: 日付 + value（brightness or frp）
+    if "acq_date" in df.columns:
+        df = df.with_columns(pl.col("acq_date").alias("date"))
+    if "frp" in df.columns:  # Fire Radiative Power (主要強度指標)
+        df = df.with_columns(pl.col("frp").alias("value"))
+    elif "bright_ti4" in df.columns:
+        df = df.with_columns(pl.col("bright_ti4").alias("value"))
+
+    df = df.with_columns(
+        pl.lit(region).alias("region"),
+        pl.lit(sensor).alias("sensor"),
+    )
+
+    save_output(df, output_file)
+
+    print(f"[FIRMS] {df.height} fire hotspots detected in {region}.")
+    return df
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch wildfire hotspots from NASA FIRMS.")
     parser.add_argument("--region", default="us_west", help=f"Region: {list(RISK_REGIONS.keys())} or bbox 'W,S,E,N'")
     parser.add_argument("--source", default="viirs_n", help=f"Sensor: {list(SOURCES.keys())}")
-    parser.add_argument("--days", type=int, default=7, help="Days (1-10).")
+    parser.add_argument("--days", type=int, default=5, help="Days (1-5).")
     parser.add_argument("--out", help="Output CSV filename.")
     args = parser.parse_args()
     fetch_firms_data(
@@ -124,4 +111,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

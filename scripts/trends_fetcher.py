@@ -1,6 +1,7 @@
 import argparse
 
 import polars as pl
+from api_utils import cli_entry, save_output
 from pytrends.request import TrendReq
 
 
@@ -9,61 +10,58 @@ def fetch_google_trends(
     timeframe: str = "today 5-y",
     geo: str = "JP",
     output_file: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches Google Trends data.
+    - geo: 国コード ('JP', 'US', ...)。全世界は '' （'world' も '' として扱う）。
+    - isPartial=True の行（集計途中の最新期間）は値が確定していないため落とす。
     """
 
     # Process keywords
     if isinstance(keywords, str):
         keywords = [k.strip() for k in keywords.split(',')]
 
-    print(f"Fetching Google Trends for: {keywords} (Geo: {geo}, Timeframe: {timeframe})...")  # noqa: E501
+    # pytrends の全世界指定は geo=''（'world' をそのまま送ると Google 側で国コードとして解釈されない）
+    if geo.lower() == "world":
+        geo = ""
 
-    try:
-        # retries/backoff_factor は pytrends 内蔵のリトライ。429 Too Many Requests を
-        # 指数バックオフで自動再試行させる (Google Trends 非公式APIは429が頻発)。
-        pytrends = TrendReq(hl='ja-JP', tz=540, retries=3, backoff_factor=2) # Japan timezone
-        pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo, gprop='')
+    print(f"Fetching Google Trends for: {keywords} (Geo: {geo or 'worldwide'}, Timeframe: {timeframe})...")
 
-        df = pytrends.interest_over_time()
+    # retries/backoff_factor は pytrends 内蔵のリトライ。429 Too Many Requests を
+    # 指数バックオフで自動再試行させる (Google Trends 非公式APIは429が頻発)。
+    pytrends = TrendReq(hl='ja-JP', tz=540, retries=3, backoff_factor=2) # Japan timezone
+    pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo, gprop='')
 
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching Google Trends: {e}")
-        print("Note: Google Trends API (unofficial) often returns 429 Too Many Requests.")  # noqa: E501
-        return
+    df = pytrends.interest_over_time()
 
     if df.empty:
         print("No data found.")
-        return
+        return pl.DataFrame()
 
-    # Drop 'isPartial' column if exists
+    # 不完全期間の行を落としてから 'isPartial' 列を削除
     if 'isPartial' in df.columns:
+        df = df[~df['isPartial'].astype(bool)]
         df = df.drop(columns=['isPartial'])
 
-    # Reset index to include 'date' in CSV
-    df.reset_index(inplace=True)
-    df_polars = pl.from_pandas(df)
+    # Reset index to include 'date'
+    df_polars = pl.from_pandas(df.reset_index())
 
-    # Output filename
-    if not output_file:
-        kw_str = "_".join(keywords[:2])
-        output_file = f"trends_{kw_str}.csv"
+    save_output(df_polars, output_file)
+    return df_polars
 
-    print(f"Saving to {output_file}...")
-    try:
-        df_polars.write_csv(output_file, include_header=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"Error saving CSV: {e}")
-
-    print("Done.")
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Google Trends Data.")
-    parser.add_argument("--keywords", required=True, help="Keywords (comma-separated). e.g., 'Python, Java, Rust'")  # noqa: E501
-    parser.add_argument("--geo", default="JP", help="Geo Code (e.g., 'JP', 'US', 'world'). Default: 'JP'")  # noqa: E501
-    parser.add_argument("--timeframe", default="today 5-y", help="Timeframe (e.g., 'today 12-m', 'today 5-y', '2020-01-01 2023-12-31'). Default: 'today 5-y'")  # noqa: E501
+    parser.add_argument("--keywords", required=True, help="Keywords (comma-separated). e.g., 'Python, Java, Rust'")
+    parser.add_argument("--geo", default="JP", help="Geo Code (e.g., 'JP', 'US'). Use '' or 'world' for worldwide. Default: 'JP'")
+    parser.add_argument("--timeframe", default="today 5-y", help="Timeframe (e.g., 'today 12-m', 'today 5-y', '2020-01-01 2023-12-31'). Default: 'today 5-y'")
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_google_trends(args.keywords, args.timeframe, args.geo, args.out)
+    output_file = args.out
+    if not output_file:
+        kw_str = "_".join(k.strip() for k in args.keywords.split(',')[:2])
+        output_file = f"trends_{kw_str}.csv"
+    fetch_google_trends(args.keywords, args.timeframe, args.geo, output_file)
+
+if __name__ == "__main__":
+    cli_entry(main)

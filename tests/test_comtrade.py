@@ -1,10 +1,8 @@
 """Tests for comtrade_fetcher.py (モック中心: レートリミット厳しく本番呼び出し回避)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
+import pytest
 from comtrade_fetcher import COUNTRY_M49, fetch_comtrade_data
 
 
@@ -93,12 +91,91 @@ def test_mock_empty_data(mock_get: MagicMock) -> None:
 
 
 @patch("comtrade_fetcher.requests.get")
-def test_mock_http_error(mock_get: MagicMock) -> None:
-    """HTTPエラーで空DataFrame。"""
-    import requests
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=MagicMock(text="rate limit"))
-    mock_get.return_value = mock_resp
+def test_mock_http_error_raises(mock_get: MagicMock, make_response) -> None:
+    """HTTP 4xx は空DFでなく例外。API のエラー本文をメッセージに含める。"""
+    mock_get.return_value = make_response(
+        status=400, json={"error": "For monthly frequency, all periods must be in YYYYMM format."}
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 400.*YYYYMM"):
+        fetch_comtrade_data(reporter="JP", period="2023")
+
+
+@patch("api_utils.get_with_retry.retry.sleep")
+@patch("comtrade_fetcher.requests.get")
+def test_mock_rate_limit_is_retried(mock_get: MagicMock, _sleep: MagicMock, make_response) -> None:
+    """無料枠のレート制限 (429) はリトライし、回復すればデータを返す。"""
+    mock_get.side_effect = [
+        make_response(status=429, text="rate limit"),
+        make_response(json={"error": "", "data": [{"period": 2023, "primaryValue": 1.0}]}),
+    ]
 
     df = fetch_comtrade_data(reporter="JP", period="2023")
-    assert df.is_empty()
+
+    assert df.height == 1
+    assert mock_get.call_count == 2
+
+
+@patch("comtrade_fetcher.requests.get")
+def test_mock_error_payload_raises(mock_get: MagicMock, make_response) -> None:
+    """HTTP 200 でも error が空でなければ例外。"""
+    mock_get.return_value = make_response(json={"error": "Invalid cmdCode", "data": None})
+
+    with pytest.raises(RuntimeError, match="Invalid cmdCode"):
+        fetch_comtrade_data(reporter="JP", period="2023")
+
+
+@patch("comtrade_fetcher.requests.get")
+def test_mock_empty_error_string_is_ok(mock_get: MagicMock, make_response) -> None:
+    """正常応答の "error": "" はエラー扱いしない。"""
+    mock_get.return_value = make_response(
+        json={"elapsedTime": "0.6 secs", "count": 1, "error": "", "data": [{"period": "2023", "primaryValue": 5.0}]}
+    )
+
+    df = fetch_comtrade_data(reporter="JP", period="2023")
+    assert df["value"].to_list() == [5.0]
+
+
+@patch("comtrade_fetcher.requests.get")
+def test_monthly_default_period_is_yyyymm(mock_get: MagicMock, make_response) -> None:
+    """frequency='M' で period 未指定なら YYYYMM（前年12月）を送る（年 'YYYY' は API が 400 を返す）。"""
+    mock_get.return_value = make_response(json={"error": "", "data": []})
+
+    fetch_comtrade_data(reporter="JP", frequency="M")
+
+    period = mock_get.call_args[1]["params"]["period"]
+    assert len(period) == 6
+    assert period.endswith("12")
+    assert "/C/M/HS" in mock_get.call_args[0][0]
+
+
+@patch("comtrade_fetcher.requests.get")
+def test_annual_default_period_is_yyyy(mock_get: MagicMock, make_response) -> None:
+    mock_get.return_value = make_response(json={"error": "", "data": []})
+
+    fetch_comtrade_data(reporter="JP")
+
+    assert len(mock_get.call_args[1]["params"]["period"]) == 4
+
+
+@pytest.mark.parametrize("role", ["reporter", "partner"])
+@patch("comtrade_fetcher.requests.get")
+def test_taiwan_alias_rejected(mock_get: MagicMock, role: str) -> None:
+    """TW は Comtrade では reporter に存在せず、partner 158 は0件になる（490 Other Asia, nes に計上）。"""
+    kwargs = {"reporter": "JP", "partner": "ALL", role: "TW"}
+
+    with pytest.raises(ValueError, match="490"):
+        fetch_comtrade_data(period="2023", **kwargs)
+    mock_get.assert_not_called()
+
+
+@patch("comtrade_fetcher.requests.get")
+def test_no_output_file_writes_nothing(
+    mock_get: MagicMock, make_response, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_get.return_value = make_response(json={"error": "", "data": [{"period": "2023", "primaryValue": 5.0}]})
+    monkeypatch.chdir(tmp_path)
+
+    fetch_comtrade_data(reporter="JP", period="2023")
+
+    assert list(tmp_path.iterdir()) == []

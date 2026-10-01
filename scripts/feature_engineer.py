@@ -1,9 +1,8 @@
 import argparse
 
 import polars as pl
-
-
-DEFAULT_DATE_FORMATS = ["%Y-%m-%d", "%Y/%m/%d", "%Y%m%d", "%Y%m", "%Y-%m"]
+from api_utils import cli_entry
+from time_align import parse_dates
 
 
 def engineer_features(
@@ -31,24 +30,9 @@ def engineer_features(
 
     # 日付型へのキャスト (もし文字列なら)  # noqa: ERA001
     # date_format 明示時はそれを、未指定時は一般的な複数フォーマットを順に試す。
-    # どのフォーマットでも全行 null になる場合は黙って壊さず例外を投げる。
+    # 全行を解析できるフォーマットが無ければ黙って壊さず例外を投げる（time_align.parse_dates）。
     if df[date_col].dtype == pl.Utf8:
-        non_null_before = df[date_col].drop_nulls().len()
-        formats = [date_format] if date_format else DEFAULT_DATE_FORMATS
-        parsed = None
-        for fmt in formats:
-            cand = df.select(
-                pl.col(date_col).str.strptime(pl.Date, fmt, strict=False)
-            ).to_series()
-            if non_null_before > 0 and cand.drop_nulls().len() > 0:
-                parsed = cand
-                break
-        if parsed is None or (non_null_before > 0 and parsed.drop_nulls().len() == 0):
-            raise ValueError(
-                f"Could not parse date column '{date_col}' with formats "
-                f"{formats}. Pass date_format explicitly."
-            )
-        df = df.with_columns(parsed.alias(date_col))
+        df = df.with_columns(parse_dates(df[date_col], date_format).alias(date_col))
 
     # ソートして時系列順を保証
     df = df.sort(date_col)
@@ -101,11 +85,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    try:
-        df = pl.read_csv(args.input)
-        engineer_features(df, args.date_col, args.target_col, date_format=args.date_format, output_file=args.out)
-    except Exception as e:  # noqa: BLE001
-        print(f"Error processing file: {e}")
+    df = pl.read_csv(args.input)
+    engineer_features(df, args.date_col, args.target_col, date_format=args.date_format, output_file=args.out)
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

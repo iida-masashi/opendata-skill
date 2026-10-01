@@ -44,7 +44,6 @@ FRED上の一部系列は第三者（S&P、ISM等）のライセンス対象で�
 | 内閣府 祝日CSV | `holiday_fetcher` | 不要 | 公開データ。出典明記を推奨 |
 | 国税庁 法人番号Web-API | `corp_fetcher` | `CORP_API_KEY` | 利用規約に同意しアプリケーションIDを取得。出典明記 |
 | 日本銀行 時系列統計 | `boj_fetcher` / `official_fx_fetcher` | 不要 | 出典明記（「日本銀行時系列統計データ検索サイト」） |
-| RESAS API | `resas_fetcher` | `RESAS_API_KEY` | 利用規約に従い出典明記（「RESAS（地域経済分析システム）を加工して作成」）。2026-07時点で提供継続を確認済み |
 | 不動産情報ライブラリ（国交省） | `mlit_fetcher` | `MLIT_API_KEY` | 申請制。利用規約に従い出典明記 |
 | G空間情報センター / PLATEAU | `plateau_fetcher` | 不要 | **データセットごとにライセンスが異なる**（多くは CC BY 4.0 または政府標準利用規約）。取得したデータセットの条件を個別確認 |
 | 国土地理院 住所検索API | `gsi_fetcher` | 不要 | 国土地理院コンテンツ利用規約。出典「国土地理院」明記 |

@@ -1,23 +1,10 @@
 import argparse
-from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが gdelt_fetcher.requests.get を patch する
 
-try:
-    from api_utils import retry_with_ratelimit
-except ImportError:
-    from .api_utils import retry_with_ratelimit
-
-
-@retry_with_ratelimit
-def _get_with_retry(url: str, **kwargs: Any) -> requests.Response:
-    """module の requests.get を呼びつつ 429/5xx で再試行する（テストは patch 可能なまま）。"""
-    kwargs.setdefault("timeout", 60)
-    resp = requests.get(url, **kwargs)
-    resp.raise_for_status()
-    return resp
+from api_utils import cli_entry, default_date_range, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 # GDELT 2.0 DOC API (無料・APIキー不要)
 DOC_API = "https://api.gdeltproject.org/api/v2/doc/doc"
@@ -53,14 +40,11 @@ def fetch_gdelt_data(
     - mode: 'timelinevolinfo' (時系列ボリューム), 'artlist' (記事一覧), 'toneChart' (感情分析)
     - theme: SCM_RISK_THEMESのエイリアスを指定すると自動でフィルタ付加
     """
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y%m%d%H%M%S")
-    else:
+    if start_date:
         start_date = start_date.replace("-", "") + "000000"
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
-    else:
+    if end_date:
         end_date = end_date.replace("-", "") + "235959"
+    start_date, end_date = default_date_range(start_date, end_date, 30, "%Y%m%d%H%M%S")
 
     q = query
     if theme:
@@ -77,50 +61,37 @@ def fetch_gdelt_data(
     }
 
     print(f"Fetching GDELT: query='{q}', mode={mode}, {start_date}→{end_date}...")
+    response = _get_with_retry(DOC_API, params=params, timeout=60)
+
+    # format=json を要求しているので、非JSON は GDELT のエラー文（HTML/テキスト）。
+    # CSV として読むとエラー文が行データになるため例外にする。
     try:
-        response = _get_with_retry(DOC_API, params=params, timeout=60)
+        data = response.json()
+    except ValueError:
+        raise RuntimeError(f"GDELT returned non-JSON response: {response.text[:200]}") from None
 
-        if "application/json" not in response.headers.get("Content-Type", ""):
-            # GDELT が CSV/HTML を返すケース
-            print("GDELT returned non-JSON. Attempting CSV parse...")
-            from io import StringIO
-            try:
-                df = pl.read_csv(StringIO(response.text))
-            except Exception:  # noqa: BLE001
-                return pl.DataFrame()
-        else:
-            data = response.json()
-            if mode == "timelinevolinfo":
-                # timeline が空リスト ([]) のとき [0] が IndexError になるのを防ぐ
-                timeline = data.get("timeline") or []
-                rows = timeline[0].get("data", []) if timeline else []
-            elif mode == "artlist":
-                rows = data.get("articles", [])
-            elif mode.startswith("tone"):
-                rows = data.get("tonechart", [])
-            else:
-                rows = data.get("data", []) if isinstance(data, dict) else []
+    if mode == "timelinevolinfo":
+        # timeline が空リスト ([]) のとき [0] が IndexError になるのを防ぐ
+        timeline = data.get("timeline") or []
+        rows = timeline[0].get("data", []) if timeline else []
+    elif mode == "artlist":
+        rows = data.get("articles", [])
+    elif mode.startswith("tone"):
+        rows = data.get("tonechart", [])
+    else:
+        rows = data.get("data", []) if isinstance(data, dict) else []
 
-            if not rows:
-                print("No GDELT data found.")
-                return pl.DataFrame()
-            df = pl.DataFrame(rows)
-
-        # 標準化: 時系列のdate正規化
-        if "date" in df.columns:
-            df = df.with_columns(pl.col("date").cast(pl.Utf8))
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-
-        return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text if e.response else str(e)}")
+    if not rows:
+        print("No GDELT data found.")
         return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching GDELT data: {e}")
-        return pl.DataFrame()
+    df = pl.DataFrame(rows)
+
+    # 標準化: 時系列のdate正規化
+    if "date" in df.columns:
+        df = df.with_columns(pl.col("date").cast(pl.Utf8))
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -145,4 +116,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

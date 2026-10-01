@@ -3,20 +3,21 @@ import argparse
 import polars as pl
 from dotenv import load_dotenv
 
-try:
-    from fred_fetcher import fetch_fred_data
-except ImportError:
-    from .fred_fetcher import fetch_fred_data
+from api_utils import cli_entry, save_output
+from fred_fetcher import fetch_fred_alias
 
 load_dotenv()
 
 # 半導体業界指標 (FRED経由で取得可能な公開データ)
 # WSTS/SEMI Book-to-Bill本体は会員制のため、FREDの公開代替系列を活用
+# A34S* は Census M3 の「Computers and Electronic Products」(NAICS 334) 全体の系列。
+# 半導体単独の値は M3 で個別公表されておらず、この業種に含まれる。
 SEMI_SERIES = {
-    # --- 米国 製造業・半導体関連 ---
-    "us_semi_shipments":    "A34SNO",            # 半導体・その他電子部品 新規受注
-    "us_semi_inventories":  "A34STI",            # 半導体・その他電子部品 在庫
-    "us_semi_ship_val":     "A34SVS",            # 半導体・その他電子部品 出荷額
+    # --- 米国 製造業・半導体関連 (Computers and Electronic Products) ---
+    "us_semi_shipments":    "A34SVS",            # 出荷額 (Value of Shipments)
+    "us_semi_new_orders":   "A34SNO",            # 新規受注 (New Orders)
+    "us_semi_inventories":  "A34STI",            # 在庫 (Total Inventories)
+    "us_semi_ship_val":     "A34SVS",            # 出荷額 (us_semi_shipments と同一系列)
     "us_ict_prod":          "IPG3341S",          # コンピュータ・電子製品 生産指数
     # --- 日本 鉱工業統計（e-Stat経由の代替） ---
     "jp_ic_prod":           "JPNPRINTO01IXOBSAM",  # 日本産業生産 (OECD経由)
@@ -36,28 +37,12 @@ def fetch_semicon_data(
     """
     半導体業界の出荷・在庫・受注データを FRED 経由で取得するわ。
     WSTS/SEMI Book-to-Bill本体は会員限定なので、FREDで公開されている代替系列（実質的に同等シグナル）を提供。
-    - 'us_semi_shipments': 米製造業統計 半導体新規受注
-    - 'us_semi_inventories': 半導体在庫
-    - 'us_semi_ship_val': 半導体出荷額
+    - 'us_semi_shipments': 米製造業統計 コンピュータ・電子製品 出荷額
+    - 'us_semi_new_orders': 同 新規受注
+    - 'us_semi_inventories': 同 在庫
     - Book-to-Bill比は compute_book_to_bill() で計算可能
     """
-    series_id = SEMI_SERIES.get(series.lower(), series)
-
-    df = fetch_fred_data(
-        series_id=series_id,
-        start_date=start_date,
-        end_date=end_date,
-        output_file=None,
-    )
-    if df.is_empty():
-        return df
-
-    df = df.with_columns(pl.lit(series).alias("series"))
-
-    if output_file:
-        print(f"Saving to {output_file}...")
-        df.write_csv(output_file)
-    return df
+    return fetch_fred_alias(SEMI_SERIES, series, start_date, end_date, output_file)
 
 
 def compute_book_to_bill(
@@ -69,8 +54,8 @@ def compute_book_to_bill(
     米半導体業界の Book-to-Bill 比を自動計算。
     値 > 1.0 は需要>供給（業界拡張期）、< 1.0 は収縮期を示す。
     """
-    orders = fetch_semicon_data("us_semi_shipments", start_date, end_date)
-    ships = fetch_semicon_data("us_semi_ship_val", start_date, end_date)
+    orders = fetch_semicon_data("us_semi_new_orders", start_date, end_date)
+    ships = fetch_semicon_data("us_semi_shipments", start_date, end_date)
 
     if orders.is_empty() or ships.is_empty():
         return pl.DataFrame()
@@ -85,11 +70,10 @@ def compute_book_to_bill(
         .otherwise(pl.col("new_orders") / pl.col("shipments"))
         .alias("book_to_bill"),
     )
-    df = df.with_columns(pl.lit("us_semi").alias("series"))
+    # Hub の date/value 契約に合わせ、B2B比を value 列としても持つ
+    df = df.with_columns(pl.col("book_to_bill").alias("value"), pl.lit("us_semi").alias("series"))
 
-    if output_file:
-        print(f"Saving B2B ratio to {output_file}...")
-        df.write_csv(output_file)
+    save_output(df, output_file)
     return df
 
 
@@ -108,4 +92,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

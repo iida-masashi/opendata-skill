@@ -1,21 +1,11 @@
 """Tests for OpenDataHub.get_many parallel fan-out (Phase 2 ⑥)."""
-import sys
 import threading
 import time
-from pathlib import Path
 
 import polars as pl
-import pytest
-
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-from scripts.opendata_hub import OpenDataHub  # noqa: E402
 
 
-@pytest.fixture
-def hub(tmp_path: Path) -> OpenDataHub:
-    return OpenDataHub(cache_dir=str(tmp_path / "cache"))
+from scripts.opendata_hub import OpenDataHub
 
 
 def test_get_many_returns_dict_keyed_by_label(hub: OpenDataHub) -> None:

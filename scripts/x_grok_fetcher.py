@@ -1,34 +1,50 @@
 import argparse
 import json
 import os
+import urllib.parse
+from typing import Any
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが x_grok_fetcher.requests.post を patch する
 from dotenv import load_dotenv
+
+from api_utils import cli_entry, default_date_range, post_with_retry, require_api_key, save_output
 
 # Load environment variables
 load_dotenv()
 
-def fetch_x_grok(query: str, limit: int = 10, output_file: str | None = None) -> None:
+
+def _output_text(data: dict[str, Any]) -> tuple[str, list[str]]:
+    """Responses API の応答から (本文テキスト, 引用URL一覧) を取り出す。"""
+    texts: list[str] = []
+    cited: list[str] = list(data.get("citations") or [])
+    for item in data.get("output") or []:
+        if item.get("type") != "message":
+            continue
+        for part in item.get("content") or []:
+            if part.get("type") == "output_text":
+                texts.append(part.get("text") or "")
+                cited += [a.get("url") for a in part.get("annotations") or [] if a.get("url")]
+    return "".join(texts), cited
+
+
+def fetch_x_grok(query: str, limit: int = 10, output_file: str | None = None) -> pl.DataFrame:
     """
     Fetches real-time X (Twitter) posts via Grok (xAI) API.
     Requirement: XAI_API_KEY in .env
-    
+
     This implementation is inspired by the 'grok_context_research.ts' script
     from the HayattiQ/x-research-skills repository.
-    It uses the 'grok-beta' (or similar) model to perform a search and 
-    retrieve relevant posts.
-    """  # noqa: W291, W293
 
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
+    X の検索は xAI Responses API (POST /v1/responses) の組み込みツール x_search で行う
+    (https://docs.x.ai/developers/tools/x-search)。旧 Chat Completions の Live Search
+    (search_parameters) は廃止済みで、ツール無しの chat/completions ではモデルが
+    投稿を「生成」してしまう。引用 (citations) が1件も無い応答は実データの裏付けが無いので例外にする。
+    """
     api_key = require_api_key("XAI_API_KEY", "xAI Console", "https://console.x.ai/")
 
     # Use the base URL if provided in env, otherwise default
-    base_url = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1/chat/completions")
+    base_url = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1/responses")
     model = os.getenv("XAI_MODEL", "grok-4-latest") # Default to grok-4-latest
 
     print(f"Searching X via Grok for: '{query}' (Limit: {limit}, Model: {model})...")
@@ -38,28 +54,30 @@ def fetch_x_grok(query: str, limit: int = 10, output_file: str | None = None) ->
     # The key is to ask for a JSON list of posts.
 
     system_prompt = """
-    You are an expert researcher with access to real-time X (Twitter) data.
-    Your task is to search for the user's query and extract the most relevant and recent posts.
-    
+    You are an expert researcher. Use the X search tool to find posts for the user's query.
+    Only report posts that the X search tool actually returned; never invent posts.
+
     Return the result strictly as a JSON list of objects.
     Each object must have the following keys:
     - author: The display name or handle of the post author.
     - content: The full text content of the post.
     - date: The publication date/time of the post (YYYY-MM-DD HH:MM:SS format if possible).
     - url: The permalink URL to the post.
-    
-    Do not include any conversational text, markdown formatting (like ```json), or explanations.
-    Just the raw JSON array.
-    """  # noqa: E501, W293
 
+    Do not include any conversational text, markdown formatting (like ```json), or explanations.
+    Just the raw JSON array. If no posts were found, return [].
+    """  # noqa: E501
+
+    from_date, to_date = default_date_range(None, None, 30)
     user_prompt = f"Search query: {query}. Fetch {limit} relevant posts from the last 30 days."  # noqa: E501
 
     payload = {
-        "messages": [
+        "model": model,
+        "input": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        "model": model,
+        "tools": [{"type": "x_search", "from_date": from_date, "to_date": to_date}],
         "stream": False,
         "temperature": 0.0 # Deterministic output
     }
@@ -69,57 +87,43 @@ def fetch_x_grok(query: str, limit: int = 10, output_file: str | None = None) ->
         "Authorization": f"Bearer {api_key}"
     }
 
+    response = post_with_retry(base_url, headers=headers, json=payload)
+    data = response.json()
+
+    content, cited = _output_text(data)
+    if not content:
+        raise RuntimeError(f"Grok API returned no output_text: {str(data)[:300]}")
+
+    # Clean up markdown code blocks if present
+    content = content.replace("```json", "").replace("```", "").strip()
+
     try:
-        response = requests.post(base_url, headers=headers, json=payload)  # noqa: S113
-        response.raise_for_status()
-        data = response.json()
-
-        # Check if choices exist
-        if "choices" not in data or not data["choices"]:
-            print("Error: No choices returned from Grok API.")
-            return
-
-        content = data["choices"][0]["message"]["content"]
-
-        # Clean up markdown code blocks if present
-        content = content.replace("```json", "").replace("```", "").strip()
-
-        # Parse JSON
-        try:
-            posts = json.loads(content)
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON response: {e}")
-            print("Raw content received:")
-            print(content[:500] + "...") # Print first 500 chars
-            return
-
-    except Exception as e:  # noqa: BLE001
-        print(f"Error communicating with Grok API: {e}")
-        return
+        posts = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Grok の応答を JSON として解析できません: {content[:500]}") from e
 
     if not posts:
         print("No posts found matching criteria.")
-        return
+        return pl.DataFrame()
 
-    df = pl.DataFrame(posts)
+    if not cited:
+        raise RuntimeError(
+            "Grok returned posts but no citation from x_search; refusing to treat them as real posts."
+        )
 
-    if not output_file:
-        safe_query = query.replace(" ", "_")[:50]
-        output_file = f"x_grok_{safe_query}.csv"
+    df = pl.DataFrame(posts, infer_schema_length=None)
+    save_output(df, output_file)
+    return df
 
-    print(f"Saving {len(df)} posts to {output_file}...")
-    try:
-        df.write_csv(output_file, include_header=True)
-    except Exception as e:  # noqa: BLE001
-        print(f"Error saving CSV: {e}")
-
-    print("Done.")
-
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch X posts via Grok API.")
     parser.add_argument("query", help="Search query")
     parser.add_argument("--limit", type=int, default=10, help="Number of posts to fetch")  # noqa: E501
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_x_grok(args.query, args.limit, args.out)
+    safe_query = urllib.parse.quote(args.query.replace(" ", "_")[:50], safe="")
+    fetch_x_grok(args.query, args.limit, args.out or f"x_grok_{safe_query}.csv")
+
+if __name__ == "__main__":
+    cli_entry(main)

@@ -1,8 +1,11 @@
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが usgs_fetcher.requests.get を patch する
+
+from api_utils import cli_entry, default_date_range, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 # USGS Earthquake API (APIキー不要)
 BASE_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -25,10 +28,7 @@ def fetch_usgs_earthquakes(
     海外工場・サプライヤ拠点の地震リスク評価に使用。
     J-SHISは日本特化、こちらはグローバルカバレッジ。
     """
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    start_date, end_date = default_date_range(start_date, end_date, 30)
 
     params: dict = {
         "format": "geojson",
@@ -48,51 +48,41 @@ def fetch_usgs_earthquakes(
         params["maxlongitude"] = max_lon
 
     print(f"Fetching USGS earthquakes: M>={min_magnitude}, {start_date}→{end_date}...")
-    try:
-        response = requests.get(BASE_URL, params=params, timeout=60)
-        response.raise_for_status()
-        data = response.json()
+    response = _get_with_retry(BASE_URL, params=params)
+    data = response.json()
 
-        features = data.get("features", [])
-        if not features:
-            print("No earthquakes found.")
-            return pl.DataFrame()
-
-        records = []
-        for f in features:
-            props = f.get("properties", {})
-            coords = f.get("geometry", {}).get("coordinates", [None, None, None])
-            epoch_ms = props.get("time")
-            dt_str = None
-            if epoch_ms is not None:
-                dt_str = datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
-            records.append({
-                "date": dt_str,
-                "magnitude": props.get("mag"),
-                "place": props.get("place"),
-                "longitude": coords[0],
-                "latitude": coords[1],
-                "depth_km": coords[2],
-                "tsunami": props.get("tsunami"),
-                "significance": props.get("sig"),
-                "type": props.get("type"),
-                "url": props.get("url"),
-            })
-
-        df = pl.DataFrame(records)
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-
-        print(f"[USGS] {df.height} earthquakes fetched.")
-        return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text[:300] if e.response else str(e)}")
+    features = data.get("features", [])
+    if not features:
+        print("No earthquakes found.")
         return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching USGS data: {e}")
-        return pl.DataFrame()
+
+    records = []
+    for f in features:
+        props = f.get("properties", {})
+        coords = f.get("geometry", {}).get("coordinates", [None, None, None])
+        epoch_ms = props.get("time")
+        dt_str = None
+        if epoch_ms is not None:
+            dt_str = datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+        records.append({
+            "date": dt_str,
+            "magnitude": props.get("mag"),
+            "place": props.get("place"),
+            "longitude": coords[0],
+            "latitude": coords[1],
+            "depth_km": coords[2],
+            "tsunami": props.get("tsunami"),
+            "significance": props.get("sig"),
+            "type": props.get("type"),
+            "url": props.get("url"),
+        })
+
+    df = pl.DataFrame(records)
+
+    save_output(df, output_file)
+
+    print(f"[USGS] {df.height} earthquakes fetched.")
+    return df
 
 
 def main() -> None:
@@ -121,4 +111,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

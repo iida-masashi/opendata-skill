@@ -1,12 +1,10 @@
 """Regression tests for the 'silently corrupts data' bugs (2026 audit, group 1c)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from feature_engineer import engineer_features
 from odpt_fetcher import fetch_odpt_data
@@ -36,12 +34,16 @@ def test_feature_engineer_respects_explicit_format() -> None:
 
 
 # --- worldbank: a partial year range must be honored, not widened to 'all' ---
+def _wb_frame():  # -> pandas.DataFrame
+    """wbgapi の DataFrame（index=economy, 列=年）相当。"""
+    import pandas as pd
+
+    return pd.DataFrame({"Country": ["Japan"], "YR2015": [1.0]}, index=pd.Index(["JPN"], name="economy"))
+
+
 @patch("worldbank_fetcher.wb")
 def test_worldbank_partial_start_only_builds_range(mock_wb: MagicMock, tmp_path: Path) -> None:
-    fake = MagicMock()
-    fake.empty = False
-    fake.reset_index.return_value = None
-    mock_wb.data.DataFrame.return_value = fake
+    mock_wb.data.DataFrame.return_value = _wb_frame()
 
     fetch_worldbank_data("gdp", countries="JPN", start_year=2015, output_file=str(tmp_path / "o.csv"))
 
@@ -53,9 +55,7 @@ def test_worldbank_partial_start_only_builds_range(mock_wb: MagicMock, tmp_path:
 
 @patch("worldbank_fetcher.wb")
 def test_worldbank_no_range_still_all(mock_wb: MagicMock, tmp_path: Path) -> None:
-    fake = MagicMock()
-    fake.empty = False
-    mock_wb.data.DataFrame.return_value = fake
+    mock_wb.data.DataFrame.return_value = _wb_frame()
     fetch_worldbank_data("gdp", countries="JPN", output_file=str(tmp_path / "o.csv"))
     assert mock_wb.data.DataFrame.call_args[1]["time"] == "all"
 

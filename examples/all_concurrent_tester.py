@@ -9,7 +9,6 @@ SCRIPTS = [
     # API Key Required (Make sure .env is loaded)
     "scripts/estat_fetcher.py",  # Needs ESTAT_API_KEY
     "scripts/mlit_fetcher.py",   # Needs MLIT_API_KEY
-    "scripts/resas_fetcher.py",  # Needs RESAS_API_KEY
     "scripts/odpt_fetcher.py",   # Needs ODPT_API_KEY
     "scripts/corp_fetcher.py",   # Needs CORP_API_KEY
     "scripts/youtube_fetcher.py",# Needs YOUTUBE_API_KEY
@@ -36,7 +35,6 @@ SCRIPTS = [
 SCRIPT_ARGS = {
     "estat_fetcher.py": ["--statsDataId", "0003445133", "--out", "test_estat.csv"], # Consumer Price Index  # noqa: E501
     "mlit_fetcher.py": ["--year", "2023", "--pref", "13", "--city", "13101", "--out", "test_mlit.csv"], # Tokyo Land Price  # noqa: E501
-    "resas_fetcher.py": ["--pref", "13", "--city", "13101", "--out", "test_resas.csv"], # Chiyoda-ku Economy  # noqa: E501
     "odpt_fetcher.py": ["--type", "odpt:TrainInformation", "--operator", "odpt.Operator:Toei", "--out", "test_odpt.csv"], # Toei Subway  # noqa: E501
     "corp_fetcher.py": ["7010401052671", "--out", "test_corp.csv"], # National Tax Agency (Example Corp ID)  # noqa: E501
     "youtube_fetcher.py": ["dQw4w9WgXcQ", "--max", "10", "--out", "test_youtube.csv"], # Rick Roll (Example Video)  # noqa: E501
@@ -69,15 +67,24 @@ def run_script(script_path: str) -> str:
     cmd = [sys.executable, script_path] + args  # noqa: RUF005
     print(f"RUNNING: {script_name}...")
 
+    out_file = args[args.index("--out") + 1] if "--out" in args else None
+    if out_file and os.path.exists(out_file):  # noqa: PTH110
+        os.remove(out_file)  # noqa: PTH107 - 前回実行の CSV で PASS 判定しないよう消す
+
     try:
         # Run with timeout to prevent hanging
         # Use encoding='utf-8' to handle Japanese characters in output
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, encoding='utf-8', errors='replace')  # noqa: PLW1510, S603
 
+        # 終了コード0だけでは「正常応答で0件（CSV未作成）」も合格になるため、
+        # --out の CSV が実際に書かれたことまで確認する。APIキー未設定は失敗ではなく SKIP。
         if result.returncode == 0:
+            if out_file and not (os.path.exists(out_file) and os.path.getsize(out_file) > 0):  # noqa: PTH110, PTH202
+                return f"NODATA: {script_name} (exit 0 but {out_file} was not written)\n{result.stdout[-500:]}"
             return f"PASS: {script_name}"
-        else:
-            return f"FAIL: {script_name}\nError: {result.stderr}"
+        if "MissingApiKeyError" in result.stderr:
+            return f"SKIP: {script_name} (API key not set)"
+        return f"FAIL: {script_name}\nError: {result.stderr}"
 
     except subprocess.TimeoutExpired:
         return f"TIMEOUT: {script_name}"
@@ -112,9 +119,10 @@ def test_concurrent_execution() -> None:
 
     # Summary
     pass_count = sum(1 for r in results if r.startswith("PASS"))
-    fail_count = sum(1 for r in results if r.startswith("FAIL") or r.startswith("ERROR") or r.startswith("TIMEOUT"))  # noqa: E501
+    fail_count = sum(1 for r in results if r.startswith(("FAIL", "ERROR", "TIMEOUT", "NODATA")))
+    skip_count = sum(1 for r in results if r.startswith("SKIP"))
 
-    print(f"\nSummary: PASS={pass_count}, FAIL={fail_count}")
+    print(f"\nSummary: PASS={pass_count}, FAIL={fail_count}, SKIP={skip_count}")
 
     # Save results details
     with open("test_results_details.txt", "w", encoding="utf-8") as f:  # noqa: PTH123

@@ -1,7 +1,7 @@
 ---
 name: opendata-skill
-description: Comprehensive Open Data Fetcher optimized for SCM, Marketing, and Economic Analysis. Covers e-Stat, Yahoo Finance, Weather, Land Prices, RESAS, PLATEAU, World Bank, OECD, BOJ Tankan, Cabinet Office CI/DI, and more.
-version: 2.2.1 (Robustness & JP Leading Indicators)
+description: Comprehensive Open Data Fetcher optimized for SCM, Marketing, and Economic Analysis. Covers e-Stat, Yahoo Finance, Weather, Land Prices, PLATEAU, World Bank, OECD, BOJ Tankan, Cabinet Office CI/DI, and more.
+version: 2.3.0 (Fail-Loud Refactor)
 ---
 
 # 🌏 OpenData Skill (Professional Edition)
@@ -55,11 +55,11 @@ version: 2.2.1 (Robustness & JP Leading Indicators)
 
 - **Unified Interface**: `scripts/opendata_hub.py` の `OpenDataHub` が全フェッチャーを統括する唯一の統合ポイント。初期化時に `scripts/*_fetcher.py` を自動検出するため、新規ソースの追加は命名規則に従うだけで済み、手動のレジストリ登録は不要。各ソースは単体CLIとしても実行可能。
 - **Polars First**: パフォーマンスとメモリ効率のため、内部データ処理の標準は `pandas` ではなく `polars` を採用している。
-- **Fail Loud, Not Silent**: 取得失敗（パース失敗等）を「データ無し」と誤認させず、欠損covariateの混入を防ぐ。取得失敗が「確定した無データ」と区別されるよう常に扱うこと。退化データ（空・全null）はキャッシュしない。
+- **Fail Loud, Not Silent**: 取得失敗（HTTPエラー・200で返るエラーペイロード・パース失敗等）は例外として送出し、「データ無し」と誤認させず欠損covariateの混入を防ぐ。空DFは API が正常応答で0件を返した場合だけ。APIキー未設定は `MissingApiKeyError`。退化データ（空・全null）はキャッシュしない。
 - **Resilience**: 一時的エラー（HTTP 429/5xx・接続・タイムアウト）のみをリトライし、プログラムエラー（KeyError等）は即送出するリトライ層を標準装備している。無駄なリトライで待機時間を浪費しない設計。
-- **Return-value First**: フェッチャーの戻り値DataFrameを優先消費し、CSV経由の型喪失（日付の文字列化）を回避する（`_fetch_to_df`）。
+- **Return-value Contract**: フェッチャーは DataFrame を返し、Hub はそれを直接消費する（CSV を経由しないので日付などの型が保たれる）。DataFrame 以外が返ったら `TypeError`。
 - **キャッシュ**: 取得済みデータはParquet形式でローカルキャッシュされ、TTLはソースの変動性に応じて調整される（天候/AIS/GDELTは数時間、市場データは半日〜1日、マクロ/貿易データは1週間〜1ヶ月）。
-- **Parallel & Align**: `OpenDataHub.get_many()` で多ソースを並列取得し、`scripts/time_align.py` で異周波数の外生変数を共通周波数に揃えてからモデルに供給できる。1ソースの失敗は隔離され、他のソース取得を妨げない。
+- **Parallel & Align**: `OpenDataHub.get_many()` で多ソースを並列取得し、`scripts/time_align.py` で異周波数の外生変数を共通周波数に揃えてからモデルに供給できる。1ソースの失敗は隔離され（そのラベルは空DF、例外は `hub.last_errors[label]`）、他のソース取得を妨げない。
 
 ---
 

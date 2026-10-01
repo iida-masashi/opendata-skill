@@ -1,9 +1,17 @@
 import argparse
-from datetime import UTC, datetime, timedelta
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが <module>.requests.get を patch する
 from dotenv import load_dotenv
+
+from api_utils import (
+    cli_entry,
+    default_date_range,
+    redact,
+    require_api_key,
+    save_output,
+)
+from api_utils import get_with_retry_redacted as _get_redacted
 
 load_dotenv()
 
@@ -36,6 +44,7 @@ SERIES_DEFAULT_FACETS = {
 }
 
 
+
 def fetch_eia_data(
     series: str = "crude_stocks",
     start_date: str | None = None,
@@ -50,11 +59,6 @@ def fetch_eia_data(
     - 'natgas_storage': 天然ガス在庫（暖房需要・電力需要先行）
     - 'refinery_util': 精製所稼働率（供給タイト度）
     """
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
     api_key = require_api_key("EIA_API_KEY", "EIA", "https://www.eia.gov/opendata/register.php")
 
     endpoint = SERIES_ALIAS.get(series.lower(), series)
@@ -64,10 +68,7 @@ def fetch_eia_data(
     if facets is None:
         facets = SERIES_DEFAULT_FACETS.get(series.lower())
 
-    if not start_date:
-        start_date = (datetime.now(UTC) - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = datetime.now(UTC).strftime("%Y-%m-%d")
+    start_date, end_date = default_date_range(start_date, end_date, 365 * 3)
 
     params: dict = {
         "api_key": api_key,
@@ -84,39 +85,30 @@ def fetch_eia_data(
             params[f"facets[{k}][]"] = v
 
     print(f"Fetching EIA data: {series} ({endpoint}) from {start_date} to {end_date}...")
-    try:
-        response = requests.get(url, params=params, timeout=60)
-        response.raise_for_status()
-        data = response.json()
+    response = _get_redacted(url, [api_key], params=params)
+    data = response.json()
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(f"EIA API error: {redact(str(data['error']), [api_key])}")
 
-        rows = data.get("response", {}).get("data", [])
-        if not rows:
-            print("No EIA data found.")
-            return pl.DataFrame()
-
-        df = pl.DataFrame(rows)
-
-        # 標準化: period -> date, value数値化
-        if "period" in df.columns:
-            df = df.with_columns(pl.col("period").cast(pl.Utf8).alias("date"))
-        if "value" in df.columns:
-            df = df.with_columns(
-                pl.col("value").cast(pl.Float64, strict=False).alias("value")
-            )
-
-        df = df.with_columns(pl.lit(series).alias("series_alias"))
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-
-        return df
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text if e.response else str(e)}")
+    rows = data.get("response", {}).get("data", [])
+    if not rows:
+        print("No EIA data found.")
         return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching EIA data: {e}")
-        return pl.DataFrame()
+
+    df = pl.DataFrame(rows)
+
+    # 標準化: period -> date, value数値化
+    if "period" in df.columns:
+        df = df.with_columns(pl.col("period").cast(pl.Utf8).alias("date"))
+    if "value" in df.columns:
+        df = df.with_columns(
+            pl.col("value").cast(pl.Float64, strict=False).alias("value")
+        )
+
+    df = df.with_columns(pl.lit(series).alias("series_alias"))
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -137,4 +129,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

@@ -3,21 +3,22 @@ import argparse
 import polars as pl
 from dotenv import load_dotenv
 
-try:
-    from fred_fetcher import fetch_fred_data
-except ImportError:
-    from .fred_fetcher import fetch_fred_data
+from api_utils import cli_entry
+from fred_fetcher import fetch_fred_alias
 
 load_dotenv()
 
-# FRED経由で取得可能なPMI系列 (ISM発表値・S&P Global PMI)
+# FRED経由で取得可能なPMI関連・製造業先行指標。
+# ISM の PMI 系列は 2016-06-24 に FRED から全22系列が削除されており、FRED では取得できない
+# (https://news.research.stlouisfed.org/2016/06/institute-for-supply-management-data-to-be-removed-from-fred/)。
+# S&P Global PMI も FRED には無い。以下の "pmi" を名乗るエイリアスは PMI そのものではない。
 PMI_SERIES = {
     # --- ISM (米国) ---
-    "ism_mfg": "MANEMP",            # Fallback: 製造業雇用 (ISM PMIはFREDでは直接公開制限あり)
-    "ism_mfg_pmi": "NAPM",          # ISM Manufacturing PMI (旧ID / 廃止の可能性あり)
-    "ism_services": "NMFCI",        # Services index proxy
-    # --- S&P Global / Markit ---
-    "us_mfg_pmi": "IPMAN",          # Industrial Production: Manufacturing (強い代替指標)
+    "ism_mfg": "MANEMP",            # PMIではない: All Employees, Manufacturing (BLS 製造業雇用者数, 千人)
+    "ism_mfg_pmi": "NAPM",          # FREDから削除済み (ISM Manufacturing PMI)。取得はエラーになる
+    "ism_services": "NMFCI",        # FREDから削除済み (ISM Non-Manufacturing)。取得はエラーになる
+    # --- 製造業の代替指標 ---
+    "us_mfg_pmi": "IPMAN",          # PMIではない: Industrial Production: Manufacturing (NAICS) (FRB G.17 生産指数)
     "us_new_orders": "AMTMNO",      # 製造業新規受注 (PMI新規受注と高相関)
     "us_inventories": "AMTMTI",     # 製造業在庫
     "us_capacity_util": "MCUMFN",   # 製造業稼働率
@@ -43,23 +44,7 @@ def fetch_pmi_data(
     - 'oecd_cli_us': 米国OECD景気先行指数 (製造業PMIの先行指標として標準)
     - 'global_econ_policy_uncertainty': 経済政策不確実性指数
     """
-    series_id = PMI_SERIES.get(series.lower(), series)
-
-    df = fetch_fred_data(
-        series_id=series_id,
-        start_date=start_date,
-        end_date=end_date,
-        output_file=None,  # FRED側で書かず、ここでsereis aliasを付与してから書く
-    )
-    if df.is_empty():
-        return df
-
-    df = df.with_columns(pl.lit(series).alias("series"))
-
-    if output_file:
-        print(f"Saving to {output_file}...")
-        df.write_csv(output_file)
-    return df
+    return fetch_fred_alias(PMI_SERIES, series, start_date, end_date, output_file)
 
 
 def main() -> None:
@@ -73,4 +58,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

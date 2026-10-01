@@ -1,12 +1,10 @@
 """Tests for usgs_fetcher.py (USGS Earthquake - APIキー不要、実API)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from usgs_fetcher import fetch_usgs_earthquakes
 
@@ -96,12 +94,10 @@ def test_mock_empty_result(mock_get: MagicMock) -> None:
 
 
 @patch("usgs_fetcher.requests.get")
-def test_mock_http_error(mock_get: MagicMock) -> None:
-    """HTTPエラー時にクラッシュしない。"""
+def test_mock_http_error_raises(mock_get: MagicMock, make_response) -> None:
+    """HTTPエラーは空DFに化けず例外として伝播する（limit 超過等は USGS が 400 を返す）。"""
     import requests
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=MagicMock(text="err"))
-    mock_get.return_value = mock_resp
+    mock_get.return_value = make_response(text="Error 400: Bad Request", status=400)
 
-    df = fetch_usgs_earthquakes()
-    assert df.is_empty()
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_usgs_earthquakes()

@@ -30,7 +30,7 @@ Use this to identify which data sources are relevant to your sector.
 | Use Case | Recommended Data Source | Script | Description |
 | :--- | :--- | :--- | :--- |
 | **Demand Forecasting** | **Google Trends** | `trends_fetcher.py` | Search interest for products/brands to predict demand. |
-| **Catchment Analysis** | **RESAS** | `resas_fetcher.py` | Population demographics and flow in specific regions. |
+| **Catchment Analysis** | **e-Stat (Census / Economic Census)** | `estat_fetcher.py` | Population composition, establishments and firms by region. |
 | **Store Opening** | **e-Stat (Census)** | `estat_fetcher.py` | Population density and household income data. |
 | **Event Planning** | **Open-Meteo** | `meteo_fetcher.py` | Weather data to adjust inventory (e.g., umbrella sales). |
 | **Competitor Analysis** | **Corporate Number** | `corp_fetcher.py` | Official corporate info of competitors. |
@@ -67,7 +67,7 @@ Use this to identify which data sources are relevant to your sector.
 
 | Use Case | Recommended Data Source | Script | Description |
 | :--- | :--- | :--- | :--- |
-| **Policy Making** | **e-Stat / RESAS** | `estat_fetcher.py`, `resas_fetcher.py` | Census and regional economy data for evidence-based policy. |
+| **Policy Making** | **e-Stat** | `estat_fetcher.py` | Census and regional economy data for evidence-based policy. |
 | **Environmental Study** | **Air Quality** | `air_quality_fetcher.py` | PM2.5, NO2 levels for environmental monitoring. |
 | **Urban Transit** | **ODPT** | `odpt_fetcher.py` | Public transport data for smart city projects. |
 | **Open Data Search** | **CKAN / e-Gov** | `ckan_fetcher.py` | Discovering new datasets across government agencies. |

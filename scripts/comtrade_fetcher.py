@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 
 import polars as pl
 import requests
+from api_utils import cli_entry, format_http_error, save_output
+from api_utils import get_with_retry as _get_with_retry
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,12 +22,29 @@ COUNTRY_M49 = {
     "CN": "156",   # China
     "DE": "276",   # Germany
     "KR": "410",   # Korea Rep.
-    "TW": "158",   # Taiwan
     "VN": "704",   # Vietnam
     "TH": "764",   # Thailand
     "IN": "699",   # India
     "ALL": "0",    # World aggregate (M49 code for "World" is 0)
 }
+
+# Comtrade の参照表 (https://comtradeapi.un.org/files/v1/app/reference/Reporters.json /
+# partnerAreas.json) では、台湾は報告国 (reporter) に存在せず、相手国としての 158 は表に
+# あっても各国の報告では 490 "Other Asia, nes"（その他アジア・他に分類されないもの）に計上される。
+# 158 を送ると黙って0件になるため、別名 TW は受け付けずに理由を示す。
+UNSUPPORTED_ALIASES = {
+    "TW": (
+        "Taiwan is not a UN Comtrade reporter, and partner trade with Taiwan is recorded "
+        "under 490 'Other Asia, nes' (code 158 returns no data). "
+        "Pass partner='490' explicitly if that aggregate is what you want."
+    ),
+}
+
+
+def _resolve_country(code: str) -> str:
+    if code.upper() in UNSUPPORTED_ALIASES:
+        raise ValueError(UNSUPPORTED_ALIASES[code.upper()])
+    return COUNTRY_M49.get(code.upper(), code)
 
 
 def fetch_comtrade_data(
@@ -44,13 +63,15 @@ def fetch_comtrade_data(
     - hs_code: HSコード (例: '8703'=乗用車, '8542'=集積回路, 'TOTAL'=総額)
     - flow: M (輸入) / X (輸出)
     - frequency: A (年次) / M (月次)
-    - period: 年または年月 (例: '2023', '202312', '2022,2023')
+    - period: 年または年月 (例: '2023', '202312', '2022,2023')。月次 (frequency='M') は YYYYMM 必須。
+      未指定時は前年（月次は前年12月。無料プレビューAPIは1回1期間まで）。
     """
-    reporter_code = COUNTRY_M49.get(reporter.upper(), reporter)
-    partner_code = COUNTRY_M49.get(partner.upper(), partner)
+    reporter_code = _resolve_country(reporter)
+    partner_code = _resolve_country(partner)
 
     if not period:
-        period = str(datetime.now(UTC).year - 1)
+        last_year = datetime.now(UTC).year - 1
+        period = f"{last_year}12" if frequency.upper() == "M" else str(last_year)
 
     subscription_key = os.getenv("COMTRADE_API_KEY")
 
@@ -72,44 +93,43 @@ def fetch_comtrade_data(
 
     print(f"Fetching UN Comtrade: reporter={reporter}, partner={partner}, hs={hs_code}, flow={flow}, period={period}...")
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-
-        records = data.get("data", []) if isinstance(data, dict) else []
-        if not records:
-            print("No trade data found.")
-            return pl.DataFrame()
-
-        df = pl.DataFrame(records)
-        # 主要カラムを抽出 (Comtradeの標準スキーマ)
-        keep_cols = [
-            c for c in [
-                "period", "reporterISO", "reporterDesc",
-                "partnerISO", "partnerDesc", "cmdCode", "cmdDesc",
-                "flowCode", "flowDesc", "primaryValue", "netWgt", "qty",
-            ] if c in df.columns
-        ]
-        if keep_cols:
-            df = df.select(keep_cols)
-
-        # 日付カラム標準化 (period -> date)
-        if "period" in df.columns:
-            df = df.with_columns(pl.col("period").cast(pl.Utf8).alias("date"))
-        if "primaryValue" in df.columns:
-            df = df.with_columns(pl.col("primaryValue").alias("value"))
-
-        if output_file:
-            print(f"Saving to {output_file}...")
-            df.write_csv(output_file)
-
-        return df
+        response = _get_with_retry(url, params=params, headers=headers)
     except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.text if e.response else str(e)}")
+        # 400 の本文に原因（例: "For monthly frequency, all periods must be in YYYYMM format."）が入る
+        raise RuntimeError(f"UN Comtrade {format_http_error(e)}") from e
+    data = response.json()
+
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Unexpected UN Comtrade response: {str(data)[:300]}")  # noqa: TRY004
+    # 正常応答でも "error": "" が入るので、空でない場合だけエラー扱い
+    if data.get("error"):
+        raise RuntimeError(f"UN Comtrade API error: {data['error']}")
+
+    records = data.get("data") or []
+    if not records:
+        print("No trade data found.")
         return pl.DataFrame()
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching Comtrade: {e}")
-        return pl.DataFrame()
+
+    df = pl.DataFrame(records)
+    # 主要カラムを抽出 (Comtradeの標準スキーマ)
+    keep_cols = [
+        c for c in [
+            "period", "reporterISO", "reporterDesc",
+            "partnerISO", "partnerDesc", "cmdCode", "cmdDesc",
+            "flowCode", "flowDesc", "primaryValue", "netWgt", "qty",
+        ] if c in df.columns
+    ]
+    if keep_cols:
+        df = df.select(keep_cols)
+
+    # 日付カラム標準化 (period -> date)
+    if "period" in df.columns:
+        df = df.with_columns(pl.col("period").cast(pl.Utf8).alias("date"))
+    if "primaryValue" in df.columns:
+        df = df.with_columns(pl.col("primaryValue").alias("value"))
+
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -134,4 +154,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

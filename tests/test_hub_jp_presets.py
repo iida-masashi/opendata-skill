@@ -4,22 +4,13 @@ These wrap the existing e-Stat fetch path with verified statsDataIds:
   - get_keiki_di():        景気動向指数 (CI/DI, incl. 先行指数)  -> 0003446461
   - get_inbound_visitors(): 訪日外客数 (港別 入国外国人国籍・地域) -> 0003449064
 """
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import polars as pl
 import pytest
 
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
 
-from scripts.opendata_hub import OpenDataHub  # noqa: E402
-
-
-@pytest.fixture
-def hub(tmp_path: Path) -> OpenDataHub:
-    return OpenDataHub(cache_dir=str(tmp_path / "cache"))
+from scripts.opendata_hub import OpenDataHub
 
 
 def test_keiki_di_calls_estat_with_correct_id(
@@ -62,7 +53,6 @@ def test_get_boj_tankan_method(hub: OpenDataHub) -> None:
         @staticmethod
         def fetch_boj_data(output_file=None, **kwargs):
             captured.update(kwargs)
-            pl.DataFrame({"date": ["202601"], "value": [17.0]}).write_csv(output_file)
             return pl.DataFrame({"date": ["202601"], "value": [17.0]})
 
     hub.fetchers["boj"] = Path("boj_fetcher.py")

@@ -2,21 +2,9 @@ import argparse
 from typing import Any
 
 import polars as pl
-import requests
-
-try:
-    from api_utils import retry_with_ratelimit
-except ImportError:
-    from .api_utils import retry_with_ratelimit
-
-
-@retry_with_ratelimit
-def _get_with_retry(url: str, **kwargs: Any) -> requests.Response:
-    """module の requests.get を呼びつつ 429/5xx で再試行する（テストは patch 可能なまま）。"""
-    kwargs.setdefault("timeout", 60)
-    resp = requests.get(url, **kwargs)
-    resp.raise_for_status()
-    return resp
+import requests  # noqa: F401 - テストが air_quality_fetcher.requests.get を patch する
+from api_utils import cli_entry, save_output
+from meteo_fetcher import apply_date_range, request_open_meteo
 
 
 def fetch_air_quality(
@@ -25,10 +13,11 @@ def fetch_air_quality(
     output_file: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> None:
+) -> pl.DataFrame:
     """
     Fetches Air Quality data from Open-Meteo API.
     Replaces "AEROS" which has no public API.
+    start_date / end_date は両方指定するか両方省略する。
     """
     base_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
@@ -38,41 +27,33 @@ def fetch_air_quality(
         "hourly": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone,dust",
     }
 
-    if start_date and end_date:
-        params["start_date"] = start_date
-        params["end_date"] = end_date
+    apply_date_range(params, start_date, end_date)
 
     print(f"Fetching Air Quality (Lat: {lat}, Lon: {lon})...")
 
-    try:
-        response = _get_with_retry(base_url, params=params, timeout=30)
-        data = response.json()
-    except Exception as e:
-        print(f"Error fetching Air Quality data: {e}")
-        return
+    data = request_open_meteo(base_url, params, timeout=30)
 
-    hourly_data = data.get("hourly", {})
-    if not hourly_data:
-        print("No data found.")
-        return
+    if "hourly" not in data:
+        raise RuntimeError(f"Open-Meteo Air Quality response has no 'hourly' data (keys: {sorted(data)})")
 
-    df = pl.DataFrame(hourly_data)
+    df = pl.DataFrame(data["hourly"])
 
-    if not output_file:
-        output_file = f"air_quality_{lat}_{lon}.csv"
-
-    print(f"Saving to {output_file}...")
-    df.write_csv(output_file, include_header=True)
-    print("Done.")
+    save_output(df, output_file)
+    return df
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch Air Quality (Open-Meteo).")
     parser.add_argument("--lat", required=True, type=float, help="Latitude")
     parser.add_argument("--lon", required=True, type=float, help="Longitude")
-    parser.add_argument("--start", help="Start Date (YYYY-MM-DD)")
-    parser.add_argument("--end", help="End Date (YYYY-MM-DD)")
+    parser.add_argument("--start", help="Start Date (YYYY-MM-DD). Use together with --end")
+    parser.add_argument("--end", help="End Date (YYYY-MM-DD). Use together with --start")
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_air_quality(args.lat, args.lon, args.out, args.start, args.end)
+    output_file = args.out or f"air_quality_{args.lat}_{args.lon}.csv"
+    fetch_air_quality(args.lat, args.lon, output_file, args.start, args.end)
+
+
+if __name__ == "__main__":
+    cli_entry(main)

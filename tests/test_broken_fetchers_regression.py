@@ -1,20 +1,15 @@
 """Regression tests for the 5 broken-fetcher bugs found in the 2026 audit.
 
 Each test pins the FIXED behavior; before the fix it would fail.
-Style follows test_zipcode.py: sys.path to scripts/, mock requests.get.
+Style follows test_zipcode.py: mock requests.get.
 """
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-
 import ais_fetcher
 import comtrade_fetcher
-import eia_fetcher
-import jshis_fetcher
 from corp_fetcher import fetch_corporate_info
 from eia_fetcher import fetch_eia_data
 from estat_fetcher import fetch_estat_data

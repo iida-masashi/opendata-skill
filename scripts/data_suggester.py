@@ -1,6 +1,8 @@
 import argparse
 import os
 
+from api_utils import cli_entry
+
 
 def suggest_data(keyword: str) -> None:
     """
@@ -14,8 +16,7 @@ def suggest_data(keyword: str) -> None:
     guide_path = os.path.join(script_dir, "..", "references", "INDUSTRY_GUIDE.md")  # noqa: PTH118
 
     if not os.path.exists(guide_path):  # noqa: PTH110
-        print("Error: INDUSTRY_GUIDE.md not found.")
-        return
+        raise FileNotFoundError(f"INDUSTRY_GUIDE.md not found: {guide_path}")
 
     print(f"Searching for data sources related to: '{keyword}'...")
     print("-" * 60)
@@ -48,9 +49,12 @@ def suggest_data(keyword: str) -> None:
         print("No exact matches found in the guide.")
         print("Try broader keywords like 'Manufacturing', 'Retail', 'Price', 'Weather'.")  # noqa: E501
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Suggest Open Data APIs for a given industry/keyword.")  # noqa: E501
     parser.add_argument("keyword", help="Keyword to search (e.g., 'Logistics', 'Price', 'Tourism')")  # noqa: E501
 
     args = parser.parse_args()
     suggest_data(args.keyword)
+
+if __name__ == "__main__":
+    cli_entry(main)

@@ -1,12 +1,10 @@
 """Tests for gdelt_fetcher.py (GDELT 2.0 - APIキー不要、実API)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from gdelt_fetcher import SCM_RISK_THEMES, fetch_gdelt_data
 
@@ -91,12 +89,26 @@ def test_fetch_with_theme_filter(mock_get: MagicMock) -> None:
 
 
 @patch("gdelt_fetcher.requests.get")
-def test_fetch_http_error_no_crash(mock_get: MagicMock) -> None:
-    """HTTPエラー時にクラッシュせず空DataFrameを返す。"""
+def test_fetch_http_error_raises(mock_get: MagicMock, make_response) -> None:
+    """HTTPエラーは空DFに化けず例外として伝播する。"""
     import requests
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=MagicMock(text="err"))
-    mock_get.return_value = mock_resp
+    mock_get.return_value = make_response(text="Bad Request", status=400)
 
-    df = fetch_gdelt_data(query="x")
-    assert df.is_empty()
+    with pytest.raises(requests.exceptions.HTTPError):
+        fetch_gdelt_data(query="x")
+
+
+@pytest.mark.parametrize("body", [
+    # 実API (2026-10, query="a") の HTTP 200 / text/html 応答そのもの
+    "Your query was too short or too long.\n",
+    # 複数行のエラー文は旧実装の CSV パースで行データ化していた
+    "<html><body>\nYour query was too short or too long.\nPlease refine your query.\n</body></html>\n",
+])
+@patch("gdelt_fetcher.requests.get")
+def test_non_json_error_text_is_not_parsed_as_rows(mock_get: MagicMock, body: str, make_response) -> None:
+    """format=json を要求しているので、非JSON（HTML/テキストのエラー文）は行データ・空DFにせず例外。"""
+    mock_get.return_value = make_response(text=body)
+    mock_get.return_value.headers["Content-Type"] = "text/html; charset=utf-8"
+
+    with pytest.raises(RuntimeError, match="too short"):
+        fetch_gdelt_data(query="a")

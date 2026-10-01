@@ -1,9 +1,8 @@
 """Tests for zipcode_fetcher.py (ZipCloud API)."""
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import pytest
 
 from zipcode_fetcher import fetch_zipcode
 
@@ -78,31 +77,34 @@ def test_fetch_not_found_no_csv(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_get.return_value = mock_response
 
     out = str(tmp_path / "zipcode_none.csv")
-    fetch_zipcode("9999999", output_file=out)
+    df = fetch_zipcode("9999999", output_file=out)
 
+    assert df.is_empty()  # 正常応答で0件は空DF（失敗ではない）
     assert not Path(out).exists()
 
 
 @patch("zipcode_fetcher.requests.get")
-def test_fetch_api_status_error_no_csv(mock_get: MagicMock, tmp_path: Path) -> None:
-    """APIがstatus!=200を返した場合はCSVを生成しない。"""
+def test_fetch_api_status_error_raises(mock_get: MagicMock, tmp_path: Path) -> None:
+    """HTTP 200 + status!=200（入力エラー等）は例外にする（以前は空で返っていた）。"""
     mock_response = MagicMock()
     mock_response.json.return_value = MOCK_API_ERROR_RESPONSE
     mock_response.raise_for_status.return_value = None
     mock_get.return_value = mock_response
 
     out = str(tmp_path / "zipcode_err.csv")
-    fetch_zipcode("INVALID", output_file=out)
+    with pytest.raises(ValueError, match="Invalid zipcode format"):
+        fetch_zipcode("INVALID", output_file=out)
 
     assert not Path(out).exists()
 
 
 @patch("zipcode_fetcher.requests.get")
-def test_fetch_network_error_no_crash(mock_get: MagicMock, tmp_path: Path) -> None:
-    """ネットワークエラー時にクラッシュしない。"""
-    mock_get.side_effect = Exception("Network unreachable")
+def test_fetch_network_error_raises(mock_get: MagicMock, tmp_path: Path) -> None:
+    """ネットワークエラーは握り潰さず送出する。"""
+    mock_get.side_effect = ValueError("Network unreachable")
 
     out = str(tmp_path / "zipcode_net.csv")
-    fetch_zipcode("1000001", output_file=out)
+    with pytest.raises(ValueError, match="Network unreachable"):
+        fetch_zipcode("1000001", output_file=out)
 
     assert not Path(out).exists()

@@ -1,7 +1,10 @@
 import hashlib
 import json
 import logging
+import os
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,6 +14,9 @@ import polars as pl
 class CacheManager:
     """
     Manages local caching of OpenData API responses using Parquet files.
+
+    Thread-safe: Hub.get_many はスレッド並列で同じインスタンスを共有するため、
+    メタデータの更新はロック下で行い、ファイルは一時ファイル経由の os.replace で原子的に書く。
     """
 
     def __init__(self, cache_dir: str = ".cache"):
@@ -18,6 +24,7 @@ class CacheManager:
         self.cache_dir = Path(cache_dir).resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_file = self.cache_dir / "cache_metadata.json"
+        self._lock = threading.RLock()
         self.metadata = self._load_metadata()
 
     def _load_metadata(self) -> dict[str, Any]:
@@ -29,12 +36,19 @@ class CacheManager:
                 logging.warning(f"Failed to load cache metadata: {e}")
         return {}
 
-    def _save_metadata(self) -> None:
+    def _atomic_write(self, path: Path, write: Any) -> None:
+        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
-            with open(self.metadata_file, "w", encoding="utf-8") as f:
-                json.dump(self.metadata, f, indent=2)
-        except Exception as e:
-            logging.warning(f"Failed to save cache metadata: {e}")
+            write(tmp)
+            os.replace(tmp, path)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    def _save_metadata(self) -> None:
+        # 呼び出し元がロックを保持していること
+        snapshot = json.dumps(self.metadata, indent=2)
+        self._atomic_write(self.metadata_file, lambda p: p.write_text(snapshot, encoding="utf-8"))
 
     def _generate_key(self, source: str, params: dict[str, Any]) -> str:
         """Generates a unique key based on source and parameters."""
@@ -45,7 +59,8 @@ class CacheManager:
     def get(self, source: str, params: dict[str, Any]) -> pl.DataFrame | None:
         """Retrieves data from cache if available and not expired."""
         key = self._generate_key(source, params)
-        entry = self.metadata.get(key)
+        with self._lock:
+            entry = self.metadata.get(key)
 
         if not entry:
             return None
@@ -63,6 +78,7 @@ class CacheManager:
         try:
             return pl.read_parquet(file_path)
         except Exception as e:
+            # 読めないキャッシュはミス扱い（再取得で上書きされる）
             logging.warning(f"Failed to read cache file {file_path}: {e}")
             return None
 
@@ -75,23 +91,25 @@ class CacheManager:
         file_path = self.cache_dir / f"{key}.parquet"
 
         try:
-            df.write_parquet(file_path)
-
-            self.metadata[key] = {
-                "source": source,
-                "params": params,
-                "created_at": time.time(),
-                "expires_at": time.time() + (ttl_hours * 3600),
-                "rows": len(df)
-            }
-            self._save_metadata()
+            self._atomic_write(file_path, df.write_parquet)
+            with self._lock:
+                self.metadata[key] = {
+                    "source": source,
+                    "params": params,
+                    "created_at": time.time(),
+                    "expires_at": time.time() + (ttl_hours * 3600),
+                    "rows": len(df)
+                }
+                self._save_metadata()
             logging.info(f"Cached {len(df)} rows for {source} (expires in {ttl_hours}h)")
         except Exception as e:
+            # キャッシュ保存はベストエフォート（取得結果そのものは呼び出し元に返る）
             logging.warning(f"Failed to save cache for {source}: {e}")
 
     def clear(self) -> None:
         """Clears all cached data."""
-        for file in self.cache_dir.glob("*.parquet"):
-            file.unlink()
-        self.metadata = {}
-        self._save_metadata()
+        with self._lock:
+            for file in self.cache_dir.glob("*.parquet"):
+                file.unlink()
+            self.metadata = {}
+            self._save_metadata()

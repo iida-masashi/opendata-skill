@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import polars as pl
 import pytest
 
 # wbgapi stub: Python 3.12非互換ライブラリをモックで置き換える
@@ -17,7 +18,6 @@ _wb_stub.data = MagicMock()  # type: ignore[attr-defined]
 _wb_stub.series = MagicMock()  # type: ignore[attr-defined]
 sys.modules.setdefault("wbgapi", _wb_stub)
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from worldbank_fetcher import INDICATORS, fetch_worldbank_data, list_aliases
 
@@ -108,14 +108,48 @@ def test_fetch_empty_data_no_csv(mock_wb: MagicMock, tmp_path: Path) -> None:
 
 
 @patch("worldbank_fetcher.wb.data.DataFrame")
-def test_fetch_api_error_no_crash(mock_wb: MagicMock, tmp_path: Path) -> None:
-    """wbgapiエラー時にクラッシュしない。"""
-    mock_wb.side_effect = Exception("API unavailable")
+def test_fetch_api_error_raises(mock_wb: MagicMock, tmp_path: Path) -> None:
+    """wbgapiエラーは握り潰さず送出する（以前は print して None を返していた）。"""
+    mock_wb.side_effect = RuntimeError("API unavailable")
 
     out = str(tmp_path / "wb_err.csv")
-    fetch_worldbank_data("gdp", output_file=out)
+    with pytest.raises(RuntimeError, match="API unavailable"):
+        fetch_worldbank_data("gdp", output_file=out)
 
     assert not Path(out).exists()
+
+
+@patch("worldbank_fetcher.wb.data.DataFrame")
+def test_fetch_returns_polars_dataframe(
+    mock_wb: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """戻り値は pl.DataFrame。output_file 無し(Hub 経由)なら既定名 CSV を勝手に書かない。"""
+    monkeypatch.chdir(tmp_path)
+    mock_wb.return_value = _mock_wb_dataframe()
+
+    df = fetch_worldbank_data("gdp", countries="JPN,USA")
+
+    assert isinstance(df, pl.DataFrame)
+    assert df.columns == ["Economy", "Country", "YR2022", "YR2023"]
+    assert df["Economy"].to_list() == ["JPN", "USA"]
+    assert list(tmp_path.iterdir()) == []
+
+
+@patch("worldbank_fetcher.wb.data.DataFrame")
+def test_fetch_missing_values_become_null(mock_wb: MagicMock) -> None:
+    raw = _mock_wb_dataframe()
+    raw.loc["JPN", "YR2023"] = float("nan")
+    mock_wb.return_value = raw
+    df = fetch_worldbank_data("gdp")
+    assert df["YR2023"].to_list()[0] is None
+
+
+@patch("worldbank_fetcher.wb.data.DataFrame")
+def test_fetch_csv_write_error_propagates(mock_wb: MagicMock, tmp_path: Path) -> None:
+    """CSV 書き出しの失敗を握り潰さない（出力先がディレクトリ）。"""
+    mock_wb.return_value = _mock_wb_dataframe()
+    with pytest.raises(OSError):
+        fetch_worldbank_data("gdp", output_file=str(tmp_path))
 
 
 @patch("worldbank_fetcher.wb.data.DataFrame")

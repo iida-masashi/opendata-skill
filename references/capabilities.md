@@ -39,8 +39,6 @@
 
 *   **MLIT (国土交通省) (`mlit_fetcher.py`)**
     *   **取得データ**: 不動産取引価格、地価公示データ。
-*   **RESAS (`resas_fetcher.py`)**
-    *   **取得データ**: 地域経済分析データ。人口動態、産業構造、観光客動態など。
 *   **PLATEAU (`plateau_fetcher.py`)**
     *   **取得データ**: 3D都市モデルデータ (CityGML/3D Tiles) のメタデータ。
 *   **ODPT (`odpt_fetcher.py`)**
@@ -92,7 +90,7 @@
     *   **取得データ**: USDA NASS米国農業統計、FAOSTATグローバル作況・在庫・食料需給バランス。
     *   **特徴**: `maff_fetcher` の海外版。食品業界の上流シグナル。
 *   **半導体業界 (`semicon_fetcher.py`)**
-    *   **取得データ**: 米国半導体出荷額・新規受注・在庫。Book-to-Bill比の自動計算。
+    *   **取得データ**: 米国「コンピュータ・電子製品」製造業（FRED A34S* 系列）の出荷・新規受注・在庫。半導体単独の系列ではない。Book-to-Bill比（受注/出荷）の自動計算。
     *   **特徴**: WSTS/SEMIは会員制のためFRED公開データ経由。電気機器・精密機器の景気判断。
 *   **ENTSO-E (`entsoe_fetcher.py`)**
     *   **取得データ**: 欧州15カ国の電力需給実績・予測、Day-ahead価格、風力・太陽光発電。
@@ -118,4 +116,4 @@
 *   **National Tax (`corp_fetcher.py`)**: 国税庁APIを用いた法人番号・企業情報の検索。
 *   **ML Features (`feature_engineer.py`)**: 取得した時系列データに対し、ラグ変数 (Lag)、移動平均 (Rolling Mean)、カレンダーフラグ（曜日、月末など）を自動生成。
 *   **Time Alignment (`time_align.py`)**: 異なる周波数（日次/週次/月次）の外生変数を共通周波数にリサンプリングして横結合 (`align_frequency` / `align_many`)。予測モデルへの covariate 投入前に周波数を揃える。
-*   **Parallel Fan-out (`OpenDataHub.get_many`)**: 複数ソースを並列取得 (I/Oバウンドをスレッドで並列化)。1ソースの失敗は隔離。
+*   **Parallel Fan-out (`OpenDataHub.get_many`)**: 複数ソースを並列取得 (I/Oバウンドをスレッドで並列化)。1ソースの失敗は隔離（そのラベルは空DF、例外は `hub.last_errors` に残る）。

@@ -1,6 +1,5 @@
 """Tests for semicon_fetcher.py (FRED経由、実API)."""
 import os
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +7,6 @@ import polars as pl
 import pytest
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from semicon_fetcher import SEMI_SERIES, compute_book_to_bill, fetch_semicon_data
@@ -48,7 +46,7 @@ def test_real_book_to_bill() -> None:
 
 
 @patch("fred_fetcher.requests.get")
-def test_mock_semicon_parse(mock_get: MagicMock, tmp_path: Path) -> None:
+def test_mock_semicon_parse(mock_get: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """モック: FRED JSONをパース。"""
     mock_resp = MagicMock()
     mock_resp.json.return_value = {
@@ -60,8 +58,7 @@ def test_mock_semicon_parse(mock_get: MagicMock, tmp_path: Path) -> None:
     mock_resp.raise_for_status = MagicMock()
     mock_get.return_value = mock_resp
 
-    if not os.getenv("FRED_API_KEY"):
-        os.environ["FRED_API_KEY"] = "test_key_mock"
+    monkeypatch.setenv("FRED_API_KEY", "test_key_mock")
 
     out = str(tmp_path / "semi_mock.csv")
     df = fetch_semicon_data(series="us_semi_shipments", output_file=out)
@@ -90,3 +87,40 @@ def test_mock_book_to_bill_calc(mock_fetch: MagicMock) -> None:
     b2b = df.get_column("book_to_bill").to_list()
     assert abs(b2b[0] - 1.25) < 1e-9
     assert abs(b2b[1] - 1.20) < 1e-9
+
+
+@patch("semicon_fetcher.fetch_semicon_data")
+def test_book_to_bill_has_value_column_for_hub_contract(mock_fetch: MagicMock) -> None:
+    """Hub の date/value 契約: B2B比は value 列としても返る（既存の book_to_bill 列も維持）。"""
+    mock_fetch.side_effect = [
+        pl.DataFrame({"date": ["2023-01-01"], "value": [100.0]}),
+        pl.DataFrame({"date": ["2023-01-01"], "value": [80.0]}),
+    ]
+    df = compute_book_to_bill()
+    assert "value" in df.columns
+    assert df["value"].to_list() == df["book_to_bill"].to_list()
+    for col in ["date", "new_orders", "shipments", "book_to_bill", "series"]:
+        assert col in df.columns
+
+
+def test_semi_shipments_alias_points_to_shipments_series() -> None:
+    """FRED: A34SNO=New Orders, A34SVS=Value of Shipments (Computers and Electronic Products)。"""
+    assert SEMI_SERIES["us_semi_shipments"] == "A34SVS"
+    assert SEMI_SERIES["us_semi_new_orders"] == "A34SNO"
+
+
+@patch("fred_fetcher.requests.get")
+def test_book_to_bill_uses_orders_over_shipments(
+    mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch, make_response
+) -> None:
+    """B2B比 = 新規受注(A34SNO) / 出荷(A34SVS)。系列の取り違えで常に1.0にならないこと。"""
+    monkeypatch.setenv("FRED_API_KEY", "test_key_mock")
+    values = {"A34SNO": "120.0", "A34SVS": "100.0"}
+
+    def _resp(url: str, **kwargs):
+        sid = kwargs["params"]["series_id"]
+        return make_response(json={"observations": [{"date": "2023-01-01", "value": values[sid]}]})
+
+    mock_get.side_effect = _resp
+    df = compute_book_to_bill()
+    assert df["book_to_bill"].to_list() == [pytest.approx(1.2)]

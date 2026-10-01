@@ -1,30 +1,56 @@
 import argparse
 import os
-import sys
 from typing import Any
 
 import polars as pl
-import requests
+import requests  # noqa: F401 - テストが estat_fetcher.requests.get を patch する
 from dotenv import load_dotenv
 
-try:
-    from api_utils import rate_limited, retry_with_ratelimit
-except ImportError:
-    from .api_utils import rate_limited, retry_with_ratelimit
+from api_utils import cli_entry, rate_limited, require_api_key, save_output
+from api_utils import get_with_retry as _get_with_retry
 
 # Load environment variables
 load_dotenv()
 
-@retry_with_ratelimit
+# RESULT.STATUS: 0=正常終了, 1=正常終了・該当データ無し, 2=正常終了・一括取得の一部リクエストで該当データ無し,
+# 100以上=エラー (e-Stat API 仕様 3.0)
+_ESTAT_NO_DATA_STATUSES = {1, 2}
+
+
+def check_estat_result(section: dict[str, Any]) -> bool:
+    """e-Stat 応答の RESULT.STATUS を検査する。
+
+    section は GET_STATS_DATA / GET_STATS_LIST 等のルート直下の dict。
+    正常でデータ有りなら True、正常終了だが該当データ無しなら False、エラーなら RuntimeError。
+    """
+    result = section["RESULT"]
+    status = int(result["STATUS"])
+    if status == 0:
+        return True
+    if status in _ESTAT_NO_DATA_STATUSES:
+        return False
+    raise RuntimeError(f"e-Stat API error (STATUS={status}): {result.get('ERROR_MSG')}")
+
+
+def as_list(obj: Any) -> list[Any]:
+    """e-Stat JSON は要素が1件だと配列でなく dict で返るため、常に list にそろえる。"""
+    if obj is None:
+        return []
+    if isinstance(obj, dict):
+        return [obj]
+    return obj
+
+
 @rate_limited(max_calls=2, period=1.0)
 def fetch_estat_data(
     app_id: str, stats_data_id: str, output_file: str | None = None, **kwargs: Any
-) -> None:
+) -> pl.DataFrame:
     """
-    Fetches statistical data from e-Stat API and saves it as a CSV file.
+    Fetches statistical data from e-Stat API and returns it as a Polars DataFrame.
     Accepts additional kwargs like cdArea, cdCat01 for advanced filtering.
+    output_file を指定すると CSV にも保存する。
     """
-    base_url = "http://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
+    base_url = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
     params: dict[str, Any] = {
         "appId": app_id,
         "statsDataId": stats_data_id,
@@ -36,41 +62,27 @@ def fetch_estat_data(
         params.update(kwargs)
 
     print(f"Fetching data for StatsDataId: {stats_data_id}...")
-    try:
-        response = requests.get(base_url, params=params, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
-        sys.exit(1)
+    data = _get_with_retry(base_url, params=params).json()
 
-    if data["GET_STATS_DATA"]["RESULT"]["STATUS"] != 0:
-        print(f"API Error: {data['GET_STATS_DATA']['RESULT']['ERROR_MSG']}")
-        sys.exit(1)
+    if not check_estat_result(data["GET_STATS_DATA"]):
+        print("No data (e-Stat returned STATUS: no matching data).")
+        return pl.DataFrame()
 
     statistical_data = data["GET_STATS_DATA"]["STATISTICAL_DATA"]
     if "DATA_INF" not in statistical_data:
-        print("No data found in DATA_INF.")
-        # Debug: Print keys to understand structure
-        print(f"Available keys in STATISTICAL_DATA: {list(statistical_data.keys())}")
-        if "RESULT" in statistical_data:  # Sometimes error info is here
-            print(f"Result info: {statistical_data['RESULT']}")
-        sys.exit(1)
+        raise RuntimeError(
+            f"e-Stat response has no DATA_INF despite STATUS=0 "
+            f"(keys: {list(statistical_data.keys())})"
+        )
 
     # Process Class Objects (Metadata for labels)
-    class_objects = statistical_data.get("CLASS_INF", {}).get("CLASS_OBJ", [])
+    class_objects = as_list(statistical_data.get("CLASS_INF", {}).get("CLASS_OBJ", []))
     class_map: dict[str, dict[str, Any]] = {}
-
-    # Ensure class_objects is a list
-    if isinstance(class_objects, dict):
-        class_objects = [class_objects]
 
     for class_obj in class_objects:
         class_id = class_obj["@id"]
         class_name = class_obj["@name"]
-        objects = class_obj.get("CLASS", [])
-        if isinstance(objects, dict):
-            objects = [objects]
+        objects = as_list(class_obj.get("CLASS", []))
 
         mapping = {obj["@code"]: obj["@name"] for obj in objects}
         class_map[class_id] = {"name": class_name, "mapping": mapping}
@@ -83,14 +95,17 @@ def fetch_estat_data(
     if not data_objects:
         data_objects = data_inf.get("VALUE", [])
 
-    if isinstance(data_objects, dict):
-        data_objects = [data_objects]
+    data_objects = as_list(data_objects)
 
     if not data_objects:
         print("No data found in DATA_OBJ or VALUE.")
-        sys.exit(0)
+        return pl.DataFrame()
 
     print(f"Debug: Found {len(data_objects)} items (DATA_OBJ or VALUE)")
+
+    # NOTE は表の特殊文字の凡例（例: "X"=秘匿, "-"=該当数値なし）。これらは観測値ではなく
+    # 確定した欠測なので value を null にし、記号は value_note 列に残す。
+    note_chars = {n["@char"] for n in as_list(data_inf.get("NOTE", [])) if "@char" in n}
 
     records: list[dict[str, Any]] = []
     for item in data_objects:
@@ -117,11 +132,16 @@ def fetch_estat_data(
 
         # Value handling
         if "$" in item:
-            record["value"] = item["$"]
+            if item["$"] in note_chars:
+                record["value"] = None
+                record["value_note"] = item["$"]
+            else:
+                record["value"] = item["$"]
 
         records.append(record)
 
-    df = pl.DataFrame(records)
+    # キーが行ごとに揃わない（value_note 等）ため、全行でスキーマを推論する
+    df = pl.DataFrame(records, infer_schema_length=None)
 
     # Date Formatting
     time_col = None
@@ -153,18 +173,13 @@ def fetch_estat_data(
             pl.col(time_col).map_elements(format_date, return_dtype=pl.String)
         )
 
-    # Output filename
-    if not output_file:
-        output_file = f"estat_data_{stats_data_id}.csv"
+        # Hub の date 正規化は列名 date/time/時間 の完全一致のみ。'時間軸（年次）' 等は
+        # 乗らないので、時間列の写しを date 列として先頭に足す（元の列は残す）。
+        if not any(c.lower() in ("date", "time", "時間") for c in df.columns):
+            df = df.select(pl.col(time_col).alias("date"), pl.all())
 
-    print(f"Saving to {output_file}...")
-    # Polars write_csv uses UTF-8
-    try:
-        df.write_csv(output_file, include_header=True)
-    except Exception as e:
-        print(f"Error saving CSV: {e}")
-
-    print("Done.")
+    save_output(df, output_file)
+    return df
 
 
 def main() -> None:
@@ -186,11 +201,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    try:
-        from api_utils import require_api_key
-    except ImportError:
-        from .api_utils import require_api_key
-
     app_id = args.appId or require_api_key("ESTAT_API_KEY", "e-Stat", "https://www.e-stat.go.jp/api/")
 
     extra: dict[str, str] = {}
@@ -200,8 +210,8 @@ def main() -> None:
         k, v = kv.split("=", 1)
         extra[k] = v
 
-    fetch_estat_data(app_id, args.statsDataId, args.out, **extra)
+    fetch_estat_data(app_id, args.statsDataId, args.out or f"estat_data_{args.statsDataId}.csv", **extra)
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)
