@@ -62,7 +62,7 @@ def compute_book_to_bill(
 
     orders = orders.select(["date", "value"]).rename({"value": "new_orders"})
     ships = ships.select(["date", "value"]).rename({"value": "shipments"})
-    df = orders.join(ships, on="date", how="inner")
+    df = orders.join(ships, on="date", how="inner").sort("date")
     df = df.with_columns(
         # shipments が 0/null の月は inf を出さず null にする（B2B比は未定義）
         pl.when((pl.col("shipments").is_null()) | (pl.col("shipments") == 0))

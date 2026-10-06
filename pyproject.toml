@@ -8,14 +8,11 @@ license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "yfinance",
-    "jpholiday",
     "wbgapi",
-    "openmeteo-requests",
-    "requests-cache",
-    "retry-requests",
     "pandas",
-    "polars",
+    "polars>=2",
     "requests",
+    "httpx",
     "tenacity>=9.1.4",
     "edinetdb",
     "pytrends",

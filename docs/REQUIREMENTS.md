@@ -353,22 +353,19 @@ uv run python scripts/{source}_fetcher.py --xxx --out output.csv
 
 ```toml
 [project.dependencies]
-polars                   # データ処理の中核
+polars>=2                # データ処理の中核（2.0 で join 後の行順が非保証のため、順序が要る箇所は sort する）
 requests                 # HTTP クライアント
+httpx                    # edinet_fetcher が例外型を直接参照（edinetdb の HTTP クライアント）
 tenacity                 # リトライロジック
 python-dotenv            # .env 読み込み（多数のフェッチャーが runtime import）
 yfinance                 # Yahoo Finance (pandas依存)
 wbgapi                   # World Bank
 pandas                   # yfinance/wbgapi互換のため
-pytrends                 # Google Trends
+pytrends                 # Google Trends（4.9.2 で更新停止。内蔵リトライは urllib3 2.x で TypeError になるため使わない）
 edinetdb                 # EDINET 財務データ
 matplotlib               # correlation_analyzer の可視化
 seaborn                  # correlation_analyzer の可視化
 google-api-python-client # youtube_fetcher
-openmeteo-requests       # ※現状コードでは未使用（将来用）
-requests-cache           # ※現状コードでは未使用（将来用）
-retry-requests           # ※現状コードでは未使用（将来用）
-jpholiday                # ※現状コードでは未使用（将来用）
 ```
 
 ### 7.2 テスト用依存
