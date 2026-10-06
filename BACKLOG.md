@@ -43,7 +43,7 @@
 - ~~壊れフェッチャー5本: corp(XML)/comtrade(World=0)/ais(経度符号)/eia(facet分離)/jshis(震度コード)~~ [DONE]
 - ~~静かに壊す系: feature_engineer(日付parse)/odpt(ネストJSON)/worldbank(部分期間)/semicon(ゼロ除算)~~ [DONE]
 - ~~retry述語を 429/5xx・接続系のみに限定（全Exception 5回リトライを廃止）~~ [DONE]
-- ~~429リトライ未対応のRESTフェッチャー5本＋trends(共通 retry_with_ratelimit)~~ [DONE]
+- ~~429リトライ未対応のRESTフェッチャー5本＋trends(429 は再試行せず即送出)~~ [DONE]
 - ~~entsoe processType必須化 / oecd retry有効化 / fred naive datetime / estat CLI配線＋$重複列 / gdelt空timeline~~ [DONE]
 - ~~パッケージング欠落(python-dotenv/matplotlib/seaborn/google-api-python-client)~~ [DONE]
 
@@ -62,6 +62,12 @@
 
 - ~~Phase 0〜5（テスト基盤・Hub中核・共通ヘルパー・握り潰し除去・データ破損バグ・CLI専用フェッチャー）~~ [DONE] — 詳細は `docs/REFACTORING_PLAN.md`
 - ~~RESAS API 提供終了（2025-03-24）に伴う `resas_fetcher` 削除~~ [DONE]
+
+## v2.3.1: 依存の最新化と Google Trends の後継移行 (2026-10-07 完了)
+
+- ~~polars 2.0 へ移行（join 後の行順非保証に対応し semicon を date ソート）・パッチ更新・未使用依存4件の削除・httpx の明示依存化~~ [DONE]
+- ~~pandas 3 の秒精度日付（datetime64[s]）で yahoo / trends の実データ変換が失敗する問題を修正~~ [DONE]
+- ~~Google Trends を pytrends（2023-04 で更新停止・urllib3 2.x で取得不能）から trendspyg（engine="http"）へ移行~~ [DONE]
 
 ---
 
@@ -83,8 +89,13 @@
 ### 判断保留（現状維持）
 10. **PMI の ISM 系列**: NAPM 等は FRED から削除済み、MANEMP / IPMAN は PMI ではない。エイリアスはコメントで実態を明記して残している。代替データ源を探すか削除するか
 11. **edinet の RateLimitError リトライ**: edinetdb では日次/月次上限の意味なので、リトライは待ち時間の無駄になりうる
-12. **pyarrow 非依存**: pandas 境界は dict 経由で変換している。依存に加えるか
+12. **pyarrow 非依存**: pandas 境界は dict または numpy 経由で変換している（pandas 3 の datetime64[s] はマイクロ秒にそろえる必要がある）。依存に加えるか
 13. **maff / trade のプレースホルダ**: 取得処理が無いまま Hub の自動検出に載る
+
+---
+
+### 外部動向の監視
+14. **Google Trends 公式 API**: 2026-10 時点で申請制アルファ（一般公開未発表）。一般公開されたら trendspyg（非公式・単独メンテナ・http エンジンは 1.9.0 で追加）からの移行を検討する。trendspyg は selenium を必須依存として持ち込む点も移行理由になる
 
 ---
 

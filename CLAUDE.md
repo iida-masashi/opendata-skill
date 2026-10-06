@@ -81,4 +81,4 @@ uv run python scripts/meteo_fetcher.py --lat 35.6895 --lon 139.6917 --historical
 
 - Python >=3.12、依存関係・パッケージ管理は `uv` 経由（pip/poetry直接ではない）。
 - 内部標準のDataFrameライブラリは pandas ではなく Polars — pandasは相互運用の境界としてのみ登場します（例: `yfinance` は pandas を返し、`_coerce_to_polars` が Polars に変換）。
-- 取得したデータの利用条件はソースごとに異なり、本リポジトリの MIT ライセンスの対象**外**です — 出典表記の必須要件、e-Stat/FRED/Open-Meteo の必須表記、商用利用制限に関わる変更を行う前に `docs/DATA_SOURCE_TERMS.md` を確認してください（Open-Meteo の無償枠は非商用限定、`yfinance`/`pytrends` は非公式・グレーゾーンなライブラリ、ODPT は開発者登録が必須）。
+- 取得したデータの利用条件はソースごとに異なり、本リポジトリの MIT ライセンスの対象**外**です — 出典表記の必須要件、e-Stat/FRED/Open-Meteo の必須表記、商用利用制限に関わる変更を行う前に `docs/DATA_SOURCE_TERMS.md` を確認してください（Open-Meteo の無償枠は非商用限定、`yfinance`/`trendspyg` は非公式・グレーゾーンなライブラリ、ODPT は開発者登録が必須）。

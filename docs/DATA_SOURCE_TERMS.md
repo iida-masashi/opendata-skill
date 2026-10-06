@@ -77,7 +77,7 @@ FRED上の一部系列は第三者（S&P、ISM等）のライセンス対象で�
 | ソース | フェッチャー | キー | 利用条件の要点 |
 |---|---|---|---|
 | Yahoo Finance (yfinance) | `yahoo_fetcher` / `freight_fetcher` | 不要 | ⚠️ **非公式ライブラリ**。Yahoo!の利用規約上グレーであり、個人利用・研究用途に留めることを推奨。商用プロダクトへの組み込みは非推奨。予告なく取得不能になるリスクあり |
-| Google Trends (pytrends) | `trends_fetcher` | 不要 | ⚠️ **非公式ライブラリ**。Google の利用規約上グレー。レート制限あり。同上のリスク |
+| Google Trends (trendspyg) | `trends_fetcher` | 不要 | ⚠️ **非公式ライブラリ**。Google の利用規約上グレー。レート制限あり（短時間に多数の要求を送ると HTTP 429 で拒否され、しばらく取得できない）。同上のリスク |
 | YouTube Data API v3 | `youtube_fetcher` | `YOUTUBE_API_KEY` | 公式API。**YouTube API Services Terms of Service の遵守が必須**（データの保存期間制限等あり） |
 | xAI Grok API | `x_grok_fetcher` | `XAI_API_KEY` | **有償API**。xAI利用規約に従う。X（Twitter）投稿の再配布・保存には Xのコンテンツ利用条件が別途適用される点に注意 |
 | Datalastic（AIS船舶） | `ais_fetcher` | `DATALASTIC_API_KEY` | **商用有償API**。契約条件に従う |
@@ -90,4 +90,4 @@ FRED上の一部系列は第三者（S&P、ISM等）のライセンス対象で�
 
 - 本ドキュメントは 2026-07-08 時点の各規約の要点を開発者がまとめたものであり、法的助言ではありません。
 - 各サービスの規約・提供状況は予告なく変更されます。**本スキルの利用者は、自身の利用形態（特に商用利用・データ再配布）が各提供元の規約に適合することを自ら確認する責任を負います。**
-- 非公式API（yfinance / pytrends）に依存する機能は、提供元の仕様変更により突然動作しなくなる可能性があります。
+- 非公式API（yfinance / trendspyg）に依存する機能は、提供元の仕様変更により突然動作しなくなる可能性があります。

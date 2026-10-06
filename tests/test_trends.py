@@ -1,40 +1,40 @@
-"""Tests for trends_fetcher.py (Google Trends via pytrends)."""
+"""Tests for trends_fetcher.py (Google Trends via trendspyg)."""
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import polars as pl
 import pytest
 import requests
 from trends_fetcher import fetch_google_trends
+from trendspyg import RateLimitError
+
+_DATES = ["2024-01-07T00:00:00+00:00", "2024-01-14T00:00:00+00:00",
+          "2024-01-21T00:00:00+00:00", "2024-01-28T00:00:00+00:00"]
+_VALUES = {"Python": [80, 85, 78, 90], "Rust": [30, 35, 32, 40]}
 
 
-def _mock_trends_df(last_partial: bool = False) -> pd.DataFrame:
-    """pytrends.interest_over_time()が返すようなDataFrameを生成する。"""
-    dates = pd.date_range("2024-01-01", periods=4, freq="W")
-    df = pd.DataFrame(
-        {
-            "Python": [80, 85, 78, 90],
-            "Rust": [30, 35, 32, 40],
-            "isPartial": [False, False, False, last_partial],
-        },
-        index=dates,
-    )
-    df.index.name = "date"
-    return df
+def _comparison(keywords: list[str], last_partial: bool = False) -> dict:
+    """trendspyg.download_google_trends_comparison(output_format='dict') と同じ形。"""
+    rows = [
+        {"date": d, "values": {kw: _VALUES[kw][i] for kw in keywords},
+         "is_partial": last_partial and i == len(_DATES) - 1}
+        for i, d in enumerate(_DATES)
+    ]
+    return {"keywords": keywords, "interest_over_time": rows}
 
 
-def _mock_trendreq(mock_trendreq: MagicMock, df: pd.DataFrame) -> MagicMock:
-    mock_instance = MagicMock()
-    mock_instance.interest_over_time.return_value = df
-    mock_trendreq.return_value = mock_instance
-    return mock_instance
+def _single(keyword: str, last_partial: bool = False) -> list[dict]:
+    """trendspyg.download_google_trends_interest_over_time(output_format='dict') と同じ形。"""
+    return [
+        {"date": d, "value": _VALUES[keyword][i], "is_partial": last_partial and i == len(_DATES) - 1}
+        for i, d in enumerate(_DATES)
+    ]
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_saves_csv(mock_trendreq: MagicMock, tmp_path: Path) -> None:
+@patch("trends_fetcher.download_google_trends_comparison")
+def test_fetch_trends_saves_csv(mock_cmp: MagicMock, tmp_path: Path) -> None:
     """正常系: Google TrendsデータをCSVに保存する。"""
-    _mock_trendreq(mock_trendreq, _mock_trends_df())
+    mock_cmp.return_value = _comparison(["Python", "Rust"])
 
     out = str(tmp_path / "trends_test.csv")
     fetch_google_trends("Python,Rust", output_file=out)
@@ -42,36 +42,28 @@ def test_fetch_trends_saves_csv(mock_trendreq: MagicMock, tmp_path: Path) -> Non
     content = Path(out).read_text()
     assert "Python" in content
     assert "Rust" in content
+    assert "is_partial" not in content
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_returns_dataframe(mock_trendreq: MagicMock) -> None:
-    """戻り値は date 列付きの Polars DataFrame。"""
-    _mock_trendreq(mock_trendreq, _mock_trends_df())
+@patch("trends_fetcher.download_google_trends_comparison")
+def test_fetch_trends_returns_dataframe(mock_cmp: MagicMock) -> None:
+    """戻り値は date 列付きの Polars DataFrame（date は UTC の naive datetime）。"""
+    mock_cmp.return_value = _comparison(["Python", "Rust"])
 
     df = fetch_google_trends(["Python", "Rust"])
 
     assert isinstance(df, pl.DataFrame)
     assert df.columns == ["date", "Python", "Rust"]
+    assert df.schema["date"] == pl.Datetime("us")
+    assert df["date"][0].isoformat() == "2024-01-07T00:00:00"
+    assert df["Python"].to_list() == [80, 85, 78, 90]
     assert df.height == 4
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_removes_ispartial(mock_trendreq: MagicMock, tmp_path: Path) -> None:
-    """isPartial列が出力CSVに含まれない。"""
-    _mock_trendreq(mock_trendreq, _mock_trends_df())
-
-    out = str(tmp_path / "trends_partial.csv")
-    fetch_google_trends(["Python"], output_file=out)
-
-    content = Path(out).read_text()
-    assert "isPartial" not in content
-
-
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_drops_partial_period_rows(mock_trendreq: MagicMock) -> None:
-    """isPartial=True（集計途中の最新期間）の行は値として残さず落とす。"""
-    _mock_trendreq(mock_trendreq, _mock_trends_df(last_partial=True))
+@patch("trends_fetcher.download_google_trends_comparison")
+def test_fetch_trends_drops_partial_period_rows(mock_cmp: MagicMock) -> None:
+    """is_partial=True（集計途中の最新期間）の行は値として残さず落とす。"""
+    mock_cmp.return_value = _comparison(["Python", "Rust"], last_partial=True)
 
     df = fetch_google_trends(["Python", "Rust"])
 
@@ -79,32 +71,50 @@ def test_fetch_trends_drops_partial_period_rows(mock_trendreq: MagicMock) -> Non
     assert 90 not in df["Python"].to_list()
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_string_keywords_split(mock_trendreq: MagicMock) -> None:
-    """カンマ区切り文字列をリストに分割してbuild_payloadに渡す。"""
-    mock_instance = _mock_trendreq(mock_trendreq, _mock_trends_df())
+@patch("trends_fetcher.download_google_trends_comparison")
+def test_multiple_keywords_use_comparison_over_http(mock_cmp: MagicMock) -> None:
+    """2語以上は同一スケールの比較 API を、Chrome を起動しない http エンジンで呼ぶ。"""
+    mock_cmp.return_value = _comparison(["Python", "Rust"])
 
-    fetch_google_trends("Python,Rust")
+    fetch_google_trends("Python, Rust", timeframe="today 3-m", geo="US")
 
-    call_args = mock_instance.build_payload.call_args[0]
-    assert call_args[0] == ["Python", "Rust"]
+    args, kwargs = mock_cmp.call_args
+    assert args[0] == ["Python", "Rust"]
+    assert kwargs["engine"] == "http"
+    assert kwargs["timeframe"] == "today 3-m"
+    assert kwargs["geo"] == "US"
+
+
+@patch("trends_fetcher.download_google_trends_comparison")
+@patch("trends_fetcher.download_google_trends_interest_over_time")
+def test_single_keyword_uses_interest_over_time(mock_iot: MagicMock, mock_cmp: MagicMock) -> None:
+    """1語は比較 API（2〜5語）ではなく単一キーワード API を http エンジンで呼ぶ。"""
+    mock_iot.return_value = _single("Python", last_partial=True)
+
+    df = fetch_google_trends("Python")
+
+    mock_cmp.assert_not_called()
+    assert mock_iot.call_args[0][0] == "Python"
+    assert mock_iot.call_args[1]["engine"] == "http"
+    assert df.columns == ["date", "Python"]
+    assert df["Python"].to_list() == [80, 85, 78]
 
 
 @pytest.mark.parametrize("geo", ["world", "WORLD", ""])
-@patch("trends_fetcher.TrendReq")
-def test_world_geo_maps_to_empty(mock_trendreq: MagicMock, geo: str) -> None:
-    """pytrends の全世界指定は geo=''（'world' をそのまま送らない）。"""
-    mock_instance = _mock_trendreq(mock_trendreq, _mock_trends_df())
+@patch("trends_fetcher.download_google_trends_interest_over_time")
+def test_world_geo_maps_to_empty(mock_iot: MagicMock, geo: str) -> None:
+    """Google Trends の全世界指定は geo=''（'world' をそのまま送らない）。"""
+    mock_iot.return_value = _single("Python")
 
     fetch_google_trends("Python", geo=geo)
 
-    assert mock_instance.build_payload.call_args[1]["geo"] == ""
+    assert mock_iot.call_args[1]["geo"] == ""
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_empty_data_no_csv(mock_trendreq: MagicMock, tmp_path: Path) -> None:
+@patch("trends_fetcher.download_google_trends_interest_over_time")
+def test_fetch_trends_empty_data_no_csv(mock_iot: MagicMock, tmp_path: Path) -> None:
     """データが空のときCSVを生成せず空DFを返す。"""
-    _mock_trendreq(mock_trendreq, pd.DataFrame())
+    mock_iot.return_value = []
 
     out = str(tmp_path / "trends_empty.csv")
     df = fetch_google_trends("Python", output_file=out)
@@ -113,35 +123,33 @@ def test_fetch_trends_empty_data_no_csv(mock_trendreq: MagicMock, tmp_path: Path
     assert df.is_empty()
 
 
-@patch("trends_fetcher.TrendReq")
-def test_fetch_trends_api_error_raises(mock_trendreq: MagicMock, tmp_path: Path) -> None:
-    """pytrends例外（429等）は握り潰さず送出し、CSVも作らない。"""
-    mock_instance = MagicMock()
-    mock_instance.interest_over_time.side_effect = Exception("429 Too Many Requests")
-    mock_trendreq.return_value = mock_instance
+@patch("trends_fetcher.download_google_trends_interest_over_time")
+def test_fetch_trends_api_error_raises(mock_iot: MagicMock, tmp_path: Path) -> None:
+    """trendspyg の例外（RateLimitError 等）は握り潰さず送出し、CSVも作らない。"""
+    mock_iot.side_effect = RateLimitError("Google refused a direct Trends request (HTTP 429).")
 
     out = str(tmp_path / "trends_err.csv")
-    with pytest.raises(Exception, match="429"):
+    with pytest.raises(RateLimitError, match="429"):
         fetch_google_trends("Python", output_file=out)
 
     assert not Path(out).exists()
 
 
-@patch("trends_fetcher.TrendReq")
+@patch("trends_fetcher.download_google_trends_comparison")
 def test_no_output_file_writes_nothing(
-    mock_trendreq: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    mock_cmp: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _mock_trendreq(mock_trendreq, _mock_trends_df())
+    mock_cmp.return_value = _comparison(["Python", "Rust"])
     monkeypatch.chdir(tmp_path)
 
-    fetch_google_trends("Python")
+    fetch_google_trends(["Python", "Rust"])
 
     assert list(tmp_path.iterdir()) == []
 
 
-@patch("trends_fetcher.TrendReq")
-def test_hub_get_trends(mock_trendreq: MagicMock, hub) -> None:
-    _mock_trendreq(mock_trendreq, _mock_trends_df(last_partial=True))
+@patch("trends_fetcher.download_google_trends_comparison")
+def test_hub_get_trends(mock_cmp: MagicMock, hub) -> None:
+    mock_cmp.return_value = _comparison(["Python", "Rust"], last_partial=True)
 
     df = hub.get_trends(["Python", "Rust"])
 
@@ -149,60 +157,35 @@ def test_hub_get_trends(mock_trendreq: MagicMock, hub) -> None:
     assert df.height == 3
 
 
-def _real_trendreq_session(monkeypatch: pytest.MonkeyPatch, responses: list) -> list:
-    """TrendReq は本物のまま、Cookie取得と HTTP 送信だけ差し替える（送信順に responses を返す）。"""
-    from pytrends.request import TrendReq
-
-    monkeypatch.setattr(TrendReq, "GetGoogleCookie", lambda self: {})
-    for r in responses:
-        r.headers["Content-Type"] = "text/html"  # pytrends は非200でも Content-Type を参照する
-    calls: list = []
-
-    def _send(self, url, **kwargs):
-        calls.append(url)
-        return responses[min(len(calls), len(responses)) - 1]
-
-    monkeypatch.setattr(requests.Session, "get", _send)
-    monkeypatch.setattr(requests.Session, "post", _send)
-    return calls
-
-
-def test_real_trendreq_429_is_retried_not_typeerror(
+def test_real_trendspyg_http_429_raises_once(
     monkeypatch: pytest.MonkeyPatch, make_response
 ) -> None:
-    """本物の TrendReq 経路で 429 は共通リトライに乗り、最終的に HTTPError(429) を送出する。
+    """本物の trendspyg http 経路で 429 は1回で RateLimitError になる（Chrome も再試行も無い）。"""
+    from trendspyg.explore import _http
 
-    pytrends 内蔵リトライ（retries>0）は urllib3 2.x で削除された method_whitelist を使い
-    TypeError になるため使わない（回帰テスト）。
-    """
-    calls = _real_trendreq_session(monkeypatch, [make_response(text="", status=429)])
+    monkeypatch.setattr(_http, "_session", None)
+    monkeypatch.setattr(_http, "_paused_until", 0.0)
+    calls: list = []
 
-    with pytest.raises(requests.exceptions.HTTPError, match="429"):
-        fetch_google_trends("Python")
+    def _request(self, method, url, **kwargs):
+        calls.append(url)
+        return make_response(text="", status=429, url=url)
 
-    assert len(calls) == 5  # retry_with_ratelimit の stop_after_attempt(5)
+    monkeypatch.setattr(requests.Session, "get", lambda self, url, **kw: make_response(text="", url=url))
+    monkeypatch.setattr(requests.Session, "request", _request)
 
-
-def test_real_trendreq_4xx_fails_fast(monkeypatch: pytest.MonkeyPatch, make_response) -> None:
-    """429 以外の 4xx はリトライせず即失敗する。"""
-    calls = _real_trendreq_session(monkeypatch, [make_response(text="", status=400)])
-
-    with pytest.raises(requests.exceptions.HTTPError, match="400"):
+    with pytest.raises(RateLimitError, match="429"):
         fetch_google_trends("Python")
 
     assert len(calls) == 1
 
 
-@patch("trends_fetcher.TrendReq")
-def test_second_resolution_index_converts_without_pyarrow(mock_trendreq: MagicMock) -> None:
-    """pandas 3 の pytrends は日付を datetime64[s] で返す。pl.from_pandas は pyarrow 無しだと
-    これを変換できないため、pyarrow 非依存で date 列を組み立てる。"""
-    df = _mock_trends_df()
-    df.index = df.index.astype("datetime64[s]")
-    _mock_trendreq(mock_trendreq, df)
+@pytest.mark.integration
+def test_fetch_real_api() -> None:
+    """実 Google Trends（trendspyg http エンジン）から日次データを取得できる。"""
+    df = fetch_google_trends(["coffee", "tea"], timeframe="today 3-m", geo="JP")
 
-    out = fetch_google_trends(["Python", "Rust"])
-
-    assert out.columns == ["date", "Python", "Rust"]
-    assert out.schema["date"] == pl.Datetime
-    assert out["date"][0].isoformat() == "2024-01-07T00:00:00"
+    assert df.columns == ["date", "coffee", "tea"]
+    assert df.height > 60
+    assert df.schema["date"] == pl.Datetime("us")
+    assert df["coffee"].max() <= 100

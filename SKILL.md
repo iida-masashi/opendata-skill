@@ -65,4 +65,4 @@ version: 2.3.0 (Fail-Loud Refactor)
 
 ## 📜 License & Data Terms
 
-本ソフトウェアは MIT License である（`LICENSE` 参照）。**取得したデータそのものの利用条件は、各データ提供元の規約に従う**（本ソフトウェアのライセンスとは別軸）。e-Stat / FRED / Open-Meteo には必須表記があり、Open-Meteo無償APIは非商用限定、yfinance/pytrendsは非公式・グレーゾーン、ODPTは開発者登録必須である。商用利用や出典表記が絡む提案を行う前に、必ず `docs/DATA_SOURCE_TERMS.md` を確認すること。
+本ソフトウェアは MIT License である（`LICENSE` 参照）。**取得したデータそのものの利用条件は、各データ提供元の規約に従う**（本ソフトウェアのライセンスとは別軸）。e-Stat / FRED / Open-Meteo には必須表記があり、Open-Meteo無償APIは非商用限定、yfinance/trendspygは非公式・グレーゾーン、ODPTは開発者登録必須である。商用利用や出典表記が絡む提案を行う前に、必ず `docs/DATA_SOURCE_TERMS.md` を確認すること。

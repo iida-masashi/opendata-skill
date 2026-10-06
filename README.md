@@ -35,6 +35,8 @@ cp env.example .env
 # .env を編集し、利用予定のソースに対応するキーのみ設定してください
 ```
 
+既存の環境を更新した際に `uv sync` 後 `No module named 'urllib3.exceptions'` が出る場合は、`uv sync --reinstall-package urllib3` で復旧できます（削除された依存 urllib3-future が urllib3 のファイルを巻き込んで消すため）。
+
 APIキーが未設定のまま該当ソースを呼び出した場合、「どのサイトで、どのように取得すべきか」を案内するメッセージ付きで `MissingApiKeyError` が送出されます（CLI ではメッセージを表示して終了コード1で終了）。設定漏れの有無を都度コードで確認いただく必要はありません。
 
 ## クイックスタート
@@ -120,7 +122,7 @@ RESAS API は 2025-03-24 に提供を終了したため、本ツールキット�
 
 | データソース | 取得データ | 主な用途 |
 |---|---|---|
-| Google Trends (`trends_fetcher.py`) | 検索キーワードの相対的関心度（0〜100） | 需要予測、商品・ブランドの関心度把握 |
+| Google Trends (`trends_fetcher.py`) | 検索キーワードの相対的関心度（0〜100）。[trendspyg](https://github.com/flack0x/trendspyg) の http エンジンで取得（Chrome 不要）。1〜5語を同一スケールで比較可能。短時間に多数の要求を送ると Google が HTTP 429 で拒否し、しばらく取得できなくなります | 需要予測、商品・ブランドの関心度把握 |
 | YouTube (`youtube_fetcher.py`) | 動画コメント・エンゲージメント（高評価数等）によるセンチメント | 消費者反応の定性把握 |
 | xAI Grok (`x_grok_fetcher.py`) | X（旧Twitter）の投稿データ。xAI Responses API の X 検索ツール（`x_search`）で直近30日を検索し、出典（citation）の無い結果はエラーにする（要 Grok API） | リアルタイムの世論・評判モニタリング |
 | Events (`events_fetcher.py`) | 祝日情報・地域のイベントスケジュール | カレンダー効果を考慮した需要分析 |
@@ -192,7 +194,7 @@ uv run pytest tests/ -m integration  # 実APIにアクセスするテスト
 
 - **e-Stat / FRED / Open-Meteo** には、規約上の**必須表記**が定められています。
 - **Open-Meteo** の無償APIは、**非商用利用限定**とされています。
-- **yfinance / pytrends** は非公式ライブラリであり、Yahoo!/Googleの規約上グレーな位置づけとなります（研究・個人利用の範囲での利用を推奨いたします）。
+- **yfinance / trendspyg** は非公式ライブラリであり、Yahoo!/Googleの規約上グレーな位置づけとなります（研究・個人利用の範囲での利用を推奨いたします）。
 - **ODPT** のご利用には、開発者登録および規約への同意が必須です。
 
 商用利用をご検討の際は、各データ提供元の一次情報を必ず再確認いただくとともに、詳細は [`docs/DATA_SOURCE_TERMS.md`](docs/DATA_SOURCE_TERMS.md) を必ずご確認ください。

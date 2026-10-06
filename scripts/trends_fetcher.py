@@ -1,24 +1,35 @@
 import argparse
+from typing import Any
 
-import pandas as pd
 import polars as pl
-import requests
-from api_utils import cli_entry, retry_with_ratelimit, save_output
-from pytrends.exceptions import ResponseError
-from pytrends.request import TrendReq
+from api_utils import cli_entry, save_output
+from trendspyg import (
+    download_google_trends_comparison,
+    download_google_trends_interest_over_time,
+)
 
 
-@retry_with_ratelimit
-def _interest_over_time(keywords: list[str], timeframe: str, geo: str) -> pd.DataFrame:
-    # pytrends 内蔵リトライ（retries/backoff_factor>0）は urllib3 2.x で削除された
-    # method_whitelist を渡して TypeError になるため使わず、共通の retry_with_ratelimit に任せる。
-    # pytrends の ResponseError は requests の HTTPError に載せ替え、429/5xx だけ再試行させる。
-    pytrends = TrendReq(hl='ja-JP', tz=540) # Japan timezone
-    try:
-        pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo, gprop='')
-        return pytrends.interest_over_time()
-    except ResponseError as e:
-        raise requests.exceptions.HTTPError(str(e), response=e.response) from e
+def _interest_over_time(keywords: list[str], timeframe: str, geo: str) -> list[dict[str, Any]]:
+    """[{'date': ISO8601(UTC), 'values': {kw: 0-100}, 'is_partial': bool}, ...] を返す。
+
+    engine="http" は Chrome を起動せず Google に直接問い合わせる（既定の "browser" は Chrome を起動する）。
+    trendspyg の http 経路は内部でリトライせず、403/429 で即 RateLimitError を送出し、その後5分間は
+    同じプロセスからの要求も即失敗させる。ここで再試行しても無意味なので1回だけ試して例外をそのまま送出する。
+    キャッシュは Hub の CacheManager が持つため trendspyg 側の cache/cookies は使わない。
+    """
+    if len(keywords) == 1:
+        points = download_google_trends_interest_over_time(
+            keywords[0], geo=geo, timeframe=timeframe, engine="http"
+        )
+        return [
+            {"date": p["date"], "values": {keywords[0]: p["value"]}, "is_partial": p["is_partial"]}
+            for p in points
+        ]
+    # 2〜5 キーワードは同一スケールで比較される（6 以上は trendspyg が InvalidParameterError）
+    result = download_google_trends_comparison(
+        keywords, geo=geo, timeframe=timeframe, include_geo=False, engine="http"
+    )
+    return result["interest_over_time"]
 
 
 def fetch_google_trends(
@@ -28,36 +39,34 @@ def fetch_google_trends(
     output_file: str | None = None,
 ) -> pl.DataFrame:
     """
-    Fetches Google Trends data.
+    Fetches Google Trends data (trendspyg).
     - geo: 国コード ('JP', 'US', ...)。全世界は '' （'world' も '' として扱う）。
-    - isPartial=True の行（集計途中の最新期間）は値が確定していないため落とす。
+    - is_partial=True の行（集計途中の最新期間）は値が確定していないため落とす。
+    - date は UTC の naive datetime（日次以上は日付の 00:00、時間足は UTC 時刻）。
     """
 
     # Process keywords
     if isinstance(keywords, str):
         keywords = [k.strip() for k in keywords.split(',')]
 
-    # pytrends の全世界指定は geo=''（'world' をそのまま送ると Google 側で国コードとして解釈されない）
+    # Google Trends の全世界指定は geo=''（'world' をそのまま送ると国コードとして解釈されない）
     if geo.lower() == "world":
         geo = ""
 
     print(f"Fetching Google Trends for: {keywords} (Geo: {geo or 'worldwide'}, Timeframe: {timeframe})...")
 
-    df = _interest_over_time(keywords, timeframe, geo)
+    points = [p for p in _interest_over_time(keywords, timeframe, geo) if not p["is_partial"]]
 
-    if df.empty:
+    if not points:
         print("No data found.")
         return pl.DataFrame()
 
-    # 不完全期間の行を落としてから 'isPartial' 列を削除
-    if 'isPartial' in df.columns:
-        df = df[~df['isPartial'].astype(bool)]
-        df = df.drop(columns=['isPartial'])
-
-    # インデックスを 'date' 列にして変換する。pandas 3 の pytrends は datetime64[s] を返し、
-    # pl.from_pandas は pyarrow 無しだとこれを変換できないため列ごとに numpy 経由で組み立てる。
-    date = pl.Series("date", df.index.to_numpy().astype("datetime64[us]"))
-    df_polars = pl.DataFrame({str(c): df[c].to_numpy() for c in df.columns}).insert_column(0, date)
+    df_polars = pl.DataFrame(
+        {"date": [p["date"] for p in points]}
+        | {kw: [p["values"][kw] for p in points] for kw in keywords}
+    ).with_columns(
+        pl.col("date").str.to_datetime(time_zone="UTC").dt.replace_time_zone(None).dt.cast_time_unit("us")
+    )
 
     save_output(df_polars, output_file)
     return df_polars

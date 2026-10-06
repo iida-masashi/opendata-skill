@@ -361,7 +361,7 @@ python-dotenv            # .env 読み込み（多数のフェッチャーが ru
 yfinance                 # Yahoo Finance (pandas依存)
 wbgapi                   # World Bank
 pandas                   # yfinance/wbgapi互換のため
-pytrends                 # Google Trends（4.9.2 で更新停止。内蔵リトライは urllib3 2.x で TypeError になるため使わない）
+trendspyg                # Google Trends（engine="http" で Chrome を起動しない。selenium は必須依存として入る）
 edinetdb                 # EDINET 財務データ
 matplotlib               # correlation_analyzer の可視化
 seaborn                  # correlation_analyzer の可視化
