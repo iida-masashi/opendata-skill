@@ -1,8 +1,8 @@
 # 要件定義書
 
 **システム名**: opendata-skill
-**バージョン**: 2.3.0 (Fail-Loud Refactor)
-**作成日**: 2026-04-18（最終更新: 2026-06-27）
+**バージョン**: 2.3.1 (Fail-Loud Refactor + polars 2 / trendspyg)
+**作成日**: 2026-04-18（最終更新: 2026-10-07）
 **対象リポジトリ**: `opendata-skill`（単独リポジトリ）
 
 ---

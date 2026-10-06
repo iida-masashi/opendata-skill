@@ -1,6 +1,6 @@
 [project]
 name = "opendata-skill"
-version = "2.3.0"
+version = "2.3.1"
 description = "Comprehensive Open Data Fetcher (Yahoo, WB, OECD, Weather)"
 authors = [{ name = "Masashi Iida" }]
 license = "MIT"
