@@ -1,8 +1,24 @@
 import argparse
 
+import pandas as pd
 import polars as pl
-from api_utils import cli_entry, save_output
+import requests
+from api_utils import cli_entry, retry_with_ratelimit, save_output
+from pytrends.exceptions import ResponseError
 from pytrends.request import TrendReq
+
+
+@retry_with_ratelimit
+def _interest_over_time(keywords: list[str], timeframe: str, geo: str) -> pd.DataFrame:
+    # pytrends 内蔵リトライ（retries/backoff_factor>0）は urllib3 2.x で削除された
+    # method_whitelist を渡して TypeError になるため使わず、共通の retry_with_ratelimit に任せる。
+    # pytrends の ResponseError は requests の HTTPError に載せ替え、429/5xx だけ再試行させる。
+    pytrends = TrendReq(hl='ja-JP', tz=540) # Japan timezone
+    try:
+        pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo, gprop='')
+        return pytrends.interest_over_time()
+    except ResponseError as e:
+        raise requests.exceptions.HTTPError(str(e), response=e.response) from e
 
 
 def fetch_google_trends(
@@ -27,12 +43,7 @@ def fetch_google_trends(
 
     print(f"Fetching Google Trends for: {keywords} (Geo: {geo or 'worldwide'}, Timeframe: {timeframe})...")
 
-    # retries/backoff_factor は pytrends 内蔵のリトライ。429 Too Many Requests を
-    # 指数バックオフで自動再試行させる (Google Trends 非公式APIは429が頻発)。
-    pytrends = TrendReq(hl='ja-JP', tz=540, retries=3, backoff_factor=2) # Japan timezone
-    pytrends.build_payload(keywords, cat=0, timeframe=timeframe, geo=geo, gprop='')
-
-    df = pytrends.interest_over_time()
+    df = _interest_over_time(keywords, timeframe, geo)
 
     if df.empty:
         print("No data found.")
@@ -43,8 +54,10 @@ def fetch_google_trends(
         df = df[~df['isPartial'].astype(bool)]
         df = df.drop(columns=['isPartial'])
 
-    # Reset index to include 'date'
-    df_polars = pl.from_pandas(df.reset_index())
+    # インデックスを 'date' 列にして変換する。pandas 3 の pytrends は datetime64[s] を返し、
+    # pl.from_pandas は pyarrow 無しだとこれを変換できないため列ごとに numpy 経由で組み立てる。
+    date = pl.Series("date", df.index.to_numpy().astype("datetime64[us]"))
+    df_polars = pl.DataFrame({str(c): df[c].to_numpy() for c in df.columns}).insert_column(0, date)
 
     save_output(df_polars, output_file)
     return df_polars

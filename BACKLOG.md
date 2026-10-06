@@ -43,7 +43,7 @@
 - ~~壊れフェッチャー5本: corp(XML)/comtrade(World=0)/ais(経度符号)/eia(facet分離)/jshis(震度コード)~~ [DONE]
 - ~~静かに壊す系: feature_engineer(日付parse)/odpt(ネストJSON)/worldbank(部分期間)/semicon(ゼロ除算)~~ [DONE]
 - ~~retry述語を 429/5xx・接続系のみに限定（全Exception 5回リトライを廃止）~~ [DONE]
-- ~~429リトライ未対応のRESTフェッチャー5本＋trends(pytrends内蔵retry)~~ [DONE]
+- ~~429リトライ未対応のRESTフェッチャー5本＋trends(共通 retry_with_ratelimit)~~ [DONE]
 - ~~entsoe processType必須化 / oecd retry有効化 / fred naive datetime / estat CLI配線＋$重複列 / gdelt空timeline~~ [DONE]
 - ~~パッケージング欠落(python-dotenv/matplotlib/seaborn/google-api-python-client)~~ [DONE]
 

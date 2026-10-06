@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import polars as pl
 import pytest
+import requests
 from trends_fetcher import fetch_google_trends
 
 
@@ -146,3 +147,62 @@ def test_hub_get_trends(mock_trendreq: MagicMock, hub) -> None:
 
     assert "date" in df.columns
     assert df.height == 3
+
+
+def _real_trendreq_session(monkeypatch: pytest.MonkeyPatch, responses: list) -> list:
+    """TrendReq は本物のまま、Cookie取得と HTTP 送信だけ差し替える（送信順に responses を返す）。"""
+    from pytrends.request import TrendReq
+
+    monkeypatch.setattr(TrendReq, "GetGoogleCookie", lambda self: {})
+    for r in responses:
+        r.headers["Content-Type"] = "text/html"  # pytrends は非200でも Content-Type を参照する
+    calls: list = []
+
+    def _send(self, url, **kwargs):
+        calls.append(url)
+        return responses[min(len(calls), len(responses)) - 1]
+
+    monkeypatch.setattr(requests.Session, "get", _send)
+    monkeypatch.setattr(requests.Session, "post", _send)
+    return calls
+
+
+def test_real_trendreq_429_is_retried_not_typeerror(
+    monkeypatch: pytest.MonkeyPatch, make_response
+) -> None:
+    """本物の TrendReq 経路で 429 は共通リトライに乗り、最終的に HTTPError(429) を送出する。
+
+    pytrends 内蔵リトライ（retries>0）は urllib3 2.x で削除された method_whitelist を使い
+    TypeError になるため使わない（回帰テスト）。
+    """
+    calls = _real_trendreq_session(monkeypatch, [make_response(text="", status=429)])
+
+    with pytest.raises(requests.exceptions.HTTPError, match="429"):
+        fetch_google_trends("Python")
+
+    assert len(calls) == 5  # retry_with_ratelimit の stop_after_attempt(5)
+
+
+def test_real_trendreq_4xx_fails_fast(monkeypatch: pytest.MonkeyPatch, make_response) -> None:
+    """429 以外の 4xx はリトライせず即失敗する。"""
+    calls = _real_trendreq_session(monkeypatch, [make_response(text="", status=400)])
+
+    with pytest.raises(requests.exceptions.HTTPError, match="400"):
+        fetch_google_trends("Python")
+
+    assert len(calls) == 1
+
+
+@patch("trends_fetcher.TrendReq")
+def test_second_resolution_index_converts_without_pyarrow(mock_trendreq: MagicMock) -> None:
+    """pandas 3 の pytrends は日付を datetime64[s] で返す。pl.from_pandas は pyarrow 無しだと
+    これを変換できないため、pyarrow 非依存で date 列を組み立てる。"""
+    df = _mock_trends_df()
+    df.index = df.index.astype("datetime64[s]")
+    _mock_trendreq(mock_trendreq, df)
+
+    out = fetch_google_trends(["Python", "Rust"])
+
+    assert out.columns == ["date", "Python", "Rust"]
+    assert out.schema["date"] == pl.Datetime
+    assert out["date"][0].isoformat() == "2024-01-07T00:00:00"
