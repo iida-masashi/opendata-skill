@@ -19,16 +19,18 @@ def _frame_to_polars(pdf: pd.DataFrame) -> pl.DataFrame:
     yfinance のインデックス名は日次 'Date'・日中足 'Datetime' と変わるので名前に依存しない。
     pyarrow 無しでも変換できるよう、列ごとに numpy 経由で組み立てる
     （tz付き日時は pl.from_pandas が pyarrow を要求するため UTC 経由でタイムゾーンを付け直す）。
+    pandas 3 は秒精度（datetime64[s]）を返すことがあり Polars は numpy の秒精度を受け付けないため、
+    マイクロ秒にそろえる。
     """
     idx = pdf.index
     if getattr(idx, "tz", None) is not None:
         date = (
-            pl.Series("date", idx.tz_convert("UTC").tz_localize(None).to_numpy())
+            pl.Series("date", idx.tz_convert("UTC").tz_localize(None).to_numpy().astype("datetime64[us]"))
             .dt.replace_time_zone("UTC")
             .dt.convert_time_zone(str(idx.tz))
         )
     else:
-        date = pl.Series("date", idx.to_numpy())
+        date = pl.Series("date", idx.to_numpy().astype("datetime64[us]"))
     data = pl.DataFrame({str(c): pdf[c].to_numpy() for c in pdf.columns}, nan_to_null=True)
     return data.insert_column(0, date)
 

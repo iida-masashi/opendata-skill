@@ -222,3 +222,21 @@ def test_hub_get_yahoo_intraday(mock_dl: MagicMock, hub) -> None:
 
     assert {"date", "value", "Ticker"} <= set(df.columns)
     assert df.height == 6
+
+
+@pytest.mark.parametrize("intraday", [False, True])
+@patch("yahoo_fetcher.yf.download")
+def test_second_resolution_index_converts(mock_dl: MagicMock, intraday: bool) -> None:
+    """pandas 3 の yfinance は日付を秒精度（datetime64[s]）で返すことがある。
+    Polars は numpy の秒精度を受け付けないため、マイクロ秒にそろえて変換する。"""
+    pdf = _one_ticker_frame(intraday, 100.0)
+    unit = "datetime64[s, Asia/Tokyo]" if intraday else "datetime64[s]"
+    pdf.index = pdf.index.astype(unit)
+    mock_dl.return_value = pd.concat([pdf], axis=1, keys=["7203.T"], names=["Ticker", "Price"])
+
+    df = fetch_yahoo_finance("7203.T", "2024-01-01", "2024-01-05")
+
+    expected = pl.Datetime("us", "Asia/Tokyo") if intraday else pl.Datetime("us")
+    assert df.schema["date"] == expected
+    assert df["date"][0].hour == (9 if intraday else 0)
+    assert df["value"].to_list() == [100.0, 101.0, 102.0]
