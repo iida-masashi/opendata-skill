@@ -143,7 +143,7 @@ Phase 0〜5 は実施済み。上の A〜D の表の項目は、下の「残課�
 - semicon: `us_semi_shipments` は出荷 (A34SVS)、`us_semi_new_orders` は新規受注 (A34SNO)。A34S* は半導体単独でなく「コンピュータ・電子製品」全体
 - BOJ: STATUS 前文を検査し、NEXTPOSITION でページングする
 - gdelt: 200 + text/html のエラー文は例外にする
-- power: タイトル行・空行の後のヘッダ行を探して読む
+- power: 月別 ZIP（`YYYYMM_power_usage.zip`）の日別 CSV から、最初の `DATE,TIME,` 表（1時間値）だけを読む。当月分の 404 だけは未公開として前月までを返す
 - corp: 法人名検索は 2,000 件超で分割される仕様に合わせ `divide` でページングする
 - plateau: 自治体名で照合し、同名の自治体が複数あれば ValueError
 - x_grok: `/v1/responses` + `x_search` ツールで検索し、citation の無い結果は例外にする
@@ -158,7 +158,7 @@ Phase 0〜5 は実施済み。上の A〜D の表の項目は、下の「残課�
 
 | 内容 | 状態 |
 |---|---|
-| TEPCO 電力需給 CSV: juyo-2026.csv / juyo-d-j.csv が 404、juyo-2025.csv は 2025-07-22 で停止 | URL 移転の確認が必要 |
+| TEPCO 電力需給 CSV: juyo-2026.csv / juyo-d-j.csv が 404、juyo-2025.csv は 2025-07-22 で停止 | 対応済み（月別 ZIP `YYYYMM_power_usage.zip` の日別 CSV から1時間値を読む） |
 | ENTSO-E A75: 揚水等の消費系列（outBiddingZone）が発電系列と同じ psr_type を持つ。curveType A03 で省略された position は欠損のまま | 未対応 |
 | PMI: ISM 系列（NAPM 等）は FRED から削除済み。MANEMP / IPMAN は PMI ではない | エイリアスは残し、コメントで実態を明記 |
 | FAOSTAT の item に品目名を渡している件 | 一次情報で確認できず保留 |

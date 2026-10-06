@@ -74,7 +74,7 @@
 ## 残作業 (v2.3.0 リファクタリングの残課題)
 
 ### データ取得の不具合・未対応
-1. **TEPCO 電力需給 CSV の移転確認** (`power_fetcher.py`): juyo-2026.csv / juyo-d-j.csv が 404、juyo-2025.csv は 2025-07-22 で停止。新しい公開先を確認して URL を更新する
+1. ~~**TEPCO 電力需給 CSV の移転確認** (`power_fetcher.py`): juyo-2026.csv / juyo-d-j.csv が 404、juyo-2025.csv は 2025-07-22 で停止~~ [DONE 2026-10-07] — 公開先は「2022年4月以降」の月別 ZIP（`YYYYMM_power_usage.zip`、中身は日別 CSV）。1時間値の表（当日実績・予測値・使用率・供給力）を読む
 2. **ENTSO-E A75 の残り2点** (`entsoe_fetcher.py`): 揚水等の消費系列（outBiddingZone）が発電系列と同じ psr_type を持ち値が混ざる。curveType A03 で省略された position を前値で埋めていない
 3. **e-Stat の大きな表** (`estat_fetcher.py`): NEXT_KEY ページング未対応（10万セル超は切り詰め）。10桁時間コード（例 `2024000101`）の解釈を一次情報で確認する
 4. **OECD / World Bank の date 契約**: OECD（TIME_PERIOD）と World Bank（ワイド形式 YR*）が Hub の `date`/`value` 契約に乗らない

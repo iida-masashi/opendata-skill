@@ -102,7 +102,7 @@ uv run python scripts/trends_fetcher.py --keywords "Python,Rust"
 |---|---|---|
 | Open-Meteo (`meteo_fetcher.py`) | 過去の気象データおよび予報（気温・降水量・風速・日射量、時間別/日次） | 季節性商品の需要予測、配送計画 |
 | Open-Meteo Air Quality (`air_quality_fetcher.py`) | 大気質データ（PM2.5・NO2・オゾン濃度等） | 環境モニタリング |
-| TEPCO (`power_fetcher.py`) | 東京電力管内の電力使用状況 | エネルギーコスト最適化 |
+| TEPCO (`power_fetcher.py`) | 東京電力管内の電力使用状況（1時間値の実績・予測・使用率・供給力。でんき予報の月別 ZIP） | エネルギーコスト最適化 |
 
 ### 🏙️ 地域・都市
 

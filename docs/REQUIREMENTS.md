@@ -165,7 +165,7 @@ Polars DataFrame 返却（オプションで CSV 出力）
 |---|---|---|---|
 | F-ENV-01 | Open-Meteo | `meteo_fetcher.py` | 気温・降水量・風速（1時間/日次） |
 | F-ENV-02 | Air Quality | `air_quality_fetcher.py` | PM2.5・NO2・オゾン濃度 |
-| F-ENV-03 | TEPCO | `power_fetcher.py` | 東京電力管内の電力使用状況 |
+| F-ENV-03 | TEPCO | `power_fetcher.py` | 東京電力管内の電力使用状況（1時間値の実績・予測・使用率・供給力。でんき予報の月別 ZIP） |
 | F-ENV-04 | ENTSO-E | `entsoe_fetcher.py` | 欧州15カ国の電力需給・価格 |
 
 #### 3.2.4 地域・都市
