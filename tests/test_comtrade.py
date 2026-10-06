@@ -179,3 +179,12 @@ def test_no_output_file_writes_nothing(
     fetch_comtrade_data(reporter="JP", period="2023")
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("reporter", ["ALL", "all", "0"])
+@patch("comtrade_fetcher.requests.get")
+def test_world_reporter_rejected(mock_get: MagicMock, reporter: str) -> None:
+    """0 (World) は Reporters.json に無く、報告国として送ると無効。相手国としての ALL は可。"""
+    with pytest.raises(ValueError, match="partner='ALL'"):
+        fetch_comtrade_data(reporter=reporter, period="2023")
+    mock_get.assert_not_called()

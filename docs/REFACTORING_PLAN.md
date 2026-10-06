@@ -139,7 +139,7 @@ Phase 0〜5 は実施済み。上の A〜D の表の項目は、下の「残課�
 ### 対応済みの主な挙動（現在の仕様）
 
 - yahoo: 日次・日中足ともインデックスを `date` 列にする。meteo: `daily=True` で日次を返す。comtrade: 月次の既定 period は YYYYMM
-- comtrade: `TW` は理由付きの ValueError（報告国の表に 158 は無く、相手国としての台湾は 490 "Other Asia, nes" に計上される）
+- comtrade: `TW` は理由付きの ValueError（報告国の表に 158 は無く、相手国としての台湾は 490 "Other Asia, nes" に計上される）。報告国の `ALL`（0 = World）も ValueError
 - semicon: `us_semi_shipments` は出荷 (A34SVS)、`us_semi_new_orders` は新規受注 (A34SNO)。A34S* は半導体単独でなく「コンピュータ・電子製品」全体
 - BOJ: STATUS 前文を検査し、NEXTPOSITION でページングする
 - gdelt: 200 + text/html のエラー文は例外にする
@@ -164,7 +164,7 @@ Phase 0〜5 は実施済み。上の A〜D の表の項目は、下の「残課�
 | FAOSTAT の item に品目名を渡している件 | 一次情報で確認できず保留 |
 | e-Stat: NEXT_KEY ページング未対応（10万セル超は切り詰め）、10桁時間コードの解釈 | 未対応 |
 | OECD (TIME_PERIOD) / World Bank（ワイド形式 YR*）が Hub の date 契約に乗らない | 未対応 |
-| comtrade の `reporter="ALL"` → 0 は報告国として無効 | 未対応 |
+| comtrade の `reporter="ALL"` → 0 は報告国として無効 | 対応済み（理由付きの ValueError） |
 | x_grok は実キーで未検証。plateau は同名自治体を区別できない。Datalastic のエラー応答形式は不明 | 未検証 |
 | edinet の RateLimitError は日次/月次上限なので、リトライは待ち時間の無駄になりうる | 現状維持 |
 | pyarrow が依存に無く、pandas 境界は dict 経由で変換している | 現状維持 |

@@ -68,6 +68,12 @@ def fetch_comtrade_data(
     """
     reporter_code = _resolve_country(reporter)
     partner_code = _resolve_country(partner)
+    # 0 (World) は相手国としてだけ有効で、報告国の表 (Reporters.json) には無い
+    if reporter_code == COUNTRY_M49["ALL"]:
+        raise ValueError(
+            f"reporter={reporter!r} (World, code 0) is not a UN Comtrade reporter. "
+            "Pass a single reporter country (e.g. 'JP') and use partner='ALL' for the world total."
+        )
 
     if not period:
         last_year = datetime.now(UTC).year - 1

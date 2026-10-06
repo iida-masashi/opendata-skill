@@ -78,7 +78,7 @@
 2. **ENTSO-E A75 の残り2点** (`entsoe_fetcher.py`): 揚水等の消費系列（outBiddingZone）が発電系列と同じ psr_type を持ち値が混ざる。curveType A03 で省略された position を前値で埋めていない
 3. **e-Stat の大きな表** (`estat_fetcher.py`): NEXT_KEY ページング未対応（10万セル超は切り詰め）。10桁時間コード（例 `2024000101`）の解釈を一次情報で確認する
 4. **OECD / World Bank の date 契約**: OECD（TIME_PERIOD）と World Bank（ワイド形式 YR*）が Hub の `date`/`value` 契約に乗らない
-5. **comtrade の `reporter="ALL"`**: 0 に変換されるが、0 は報告国として無効
+5. ~~**comtrade の `reporter="ALL"`**: 0 に変換されるが、0 は報告国として無効~~ [DONE 2026-10-07] — 報告国の表（Reporters.json）に 0 は無いため、理由付きの ValueError にする（相手国としての ALL はそのまま）
 
 ### 確認待ち（一次情報・実環境での検証が必要）
 6. **FAOSTAT の item 指定** (`usda_fetcher.py`): 品目名を渡しているが、API が品目コードを要求するか未確認（確認時 API が 521 で応答せず）
