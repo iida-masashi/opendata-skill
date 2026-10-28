@@ -9,7 +9,6 @@ import matplotlib
 matplotlib.use("Agg")
 
 import pytest  # noqa: E402
-
 from correlation_analyzer import analyze_correlation  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "correlation_analyzer.py"

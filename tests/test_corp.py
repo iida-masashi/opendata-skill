@@ -2,10 +2,9 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import corp_fetcher
 import pytest
 import requests
-
-import corp_fetcher
 from corp_fetcher import fetch_corporate_info
 
 

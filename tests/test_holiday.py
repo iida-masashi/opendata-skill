@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-
 from holiday_fetcher import fetch_japan_holidays
 
 CSV = "国民の祝日・休日月日,国民の祝日・休日名称\r\n2024/2/11,建国記念の日\r\n2024/1/1,元日\r\n"

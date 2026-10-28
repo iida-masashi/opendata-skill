@@ -1,7 +1,7 @@
 ---
 name: opendata-skill
-description: Comprehensive Open Data Fetcher optimized for SCM, Marketing, and Economic Analysis. Covers e-Stat, Yahoo Finance, Weather, Land Prices, PLATEAU, World Bank, OECD, BOJ Tankan, Cabinet Office CI/DI, and more.
-version: 2.3.1 (Fail-Loud Refactor + polars 2 / trendspyg)
+description: Comprehensive Open Data Fetcher optimized for SCM, S&OP, Demand Forecasting, Marketing, and Economic Analysis. Covers e-Stat (with S&OP presets), BOJ (Tankan/CGPI/SPPI), Open-Meteo (Historical/Forecast/Ensemble P10-P50-P90), Wikipedia Pageviews, Yahoo Finance, Land Prices, PLATEAU, World Bank, OECD, Cabinet Office CI/DI, and 37 fetchers in total.
+version: 2.4.0 (Demand Forecasting Expansion + Polars 2.1 / Pandas 3.1)
 ---
 
 # 🌏 OpenData Skill (Professional Edition)

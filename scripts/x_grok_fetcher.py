@@ -6,9 +6,8 @@ from typing import Any
 
 import polars as pl
 import requests  # noqa: F401 - テストが x_grok_fetcher.requests.post を patch する
-from dotenv import load_dotenv
-
 from api_utils import cli_entry, default_date_range, post_with_retry, require_api_key, save_output
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()

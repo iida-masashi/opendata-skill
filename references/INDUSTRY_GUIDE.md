@@ -14,6 +14,7 @@ Use this to identify which data sources are relevant to your sector.
 | **Trade Analysis** | **Trade Statistics (e-Stat)** | `estat_fetcher.py` | Import/Export volume of raw materials and parts. |
 | **Demand Leading Indicator** | **BOJ Tankan** | `boj_fetcher.py` | Business conditions DI (大企業製造業 業況判断DI) — a leading signal for B2B demand and capex. |
 | **Business Cycle Timing** | **Cabinet Office CI/DI** | `get_keiki_di` (e-Stat) | Composite/Diffusion Index leading series (景気動向指数 先行指数) for cycle turning points. |
+| **Input Price Pressure** | **BOJ CGPI / SPPI** | `boj_fetcher.py` | Corporate Goods Price Index (企業物価指数・輸出入物価) for upstream cost and margin forecasting. |
 
 ## 🚚 Logistics & SCM (物流・サプライチェーン)
 
@@ -22,6 +23,7 @@ Use this to identify which data sources are relevant to your sector.
 | **Route Optimization** | **GSI Maps** | `gsi_fetcher.py` | Geocoding addresses to coordinates for route planning. |
 | **Warehouse Location** | **MLIT Land Price** | `mlit_fetcher.py` | Land prices and transaction data for site selection. |
 | **Delivery Planning** | **Open-Meteo** | `meteo_fetcher.py` | Weather forecasts (Rain, Snow, Wind) impacting delivery schedules. |
+| **Probabilistic Safety Stock** | **Open-Meteo Ensemble** | `meteo_fetcher.py` | Ensemble weather forecast (P10/P50/P90 quantiles & std) for weather-driven demand uncertainty. |
 | **Address Cleansing** | **ZipCloud** | `zipcode_fetcher.py` | Normalizing address data from zipcodes. |
 | **Disaster Risk** | **River Info / J-SHIS** | `river_fetcher.py`, `jshis_fetcher.py` | Flood and earthquake risks for logistics hubs. |
 
@@ -30,6 +32,8 @@ Use this to identify which data sources are relevant to your sector.
 | Use Case | Recommended Data Source | Script | Description |
 | :--- | :--- | :--- | :--- |
 | **Demand Forecasting** | **Google Trends** | `trends_fetcher.py` | Search interest for products/brands to predict demand. |
+| **Consumer Attention (Daily)** | **Wikipedia Pageviews** | `wikipedia_fetcher.py` | Daily article pageviews (keyless, reproducible) for seasonal products, diseases, and events. |
+| **Retail Macro Baseline** | **e-Stat Retail & Watchers** | `estat_fetcher.py` | Monthly retail sales (商業動態統計), Economy Watchers (景気ウォッチャー), and household spending (家計調査). |
 | **Catchment Analysis** | **e-Stat (Census / Economic Census)** | `estat_fetcher.py` | Population composition, establishments and firms by region. |
 | **Store Opening** | **e-Stat (Census)** | `estat_fetcher.py` | Population density and household income data. |
 | **Event Planning** | **Open-Meteo** | `meteo_fetcher.py` | Weather data to adjust inventory (e.g., umbrella sales). |

@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-
-
 from gdelt_fetcher import SCM_RISK_THEMES, fetch_gdelt_data
 
 

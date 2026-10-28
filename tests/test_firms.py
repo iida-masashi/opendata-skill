@@ -3,8 +3,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-
 from firms_fetcher import RISK_REGIONS, SOURCES, fetch_firms_data
 
 

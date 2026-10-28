@@ -1,6 +1,8 @@
 import importlib
 import logging
+import re
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType
@@ -28,9 +30,8 @@ __all__ = ["MissingApiKeyError", "OpenDataHub"]
 
 class OpenDataHub:
     """
-    opendata-skill の各種フェッチャーを統合管理するハブよ。
-    個別スクリプトを意識せずに、このハブから銀河級のデータ取得ができるわ。
-    キャッシュ機能も搭載して、再取得の無駄を徹底的に排除してやるわ！
+    opendata-skill の各種フェッチャーを統合管理するハブ。
+    個別スクリプトを意識せずに、単一インターフェースからデータ取得・キャッシュ・正規化を行う。
     """
 
     def __init__(self, cache_dir: str = ".cache") -> None:
@@ -41,7 +42,7 @@ class OpenDataHub:
         self.last_errors: dict[str, Exception] = {}
 
     def _discover_fetchers(self) -> dict[str, Path]:
-        """scripts ディレクトリ内のフェッチャーを自動検出するわ"""
+        """scripts ディレクトリ内のフェッチャーを自動検出する"""
         fetchers: dict[str, Path] = {}
         for file in self.scripts_dir.glob("*_fetcher.py"):
             name = file.name.replace("_fetcher.py", "")
@@ -56,7 +57,7 @@ class OpenDataHub:
         """
         if name not in self.fetchers:
             raise ValueError(
-                f"❌ Unknown fetcher: {name}. Available: {list(self.fetchers.keys())}"
+                f"Unknown fetcher: {name}. Available: {list(self.fetchers.keys())}"
             )
         return importlib.import_module(self.fetchers[name].stem)
 
@@ -91,17 +92,44 @@ class OpenDataHub:
         return results
 
     def get_weather(self, lat: float, lon: float, **kwargs: Any) -> pl.DataFrame:
-        """気象データを取得するわ (Open-Meteo)"""
+        """気象データを取得する (Open-Meteo)"""
         return self._cached_fetch(
             "meteo", "fetch_open_meteo", "weather",
             {"lat": lat, "lon": lon, **kwargs}, 24,
             {"latitude": lat, "longitude": lon, **kwargs},
         )
 
+    def get_weather_ensemble(
+        self,
+        lat: float,
+        lon: float,
+        variables: str | Sequence[str] | None = None,
+        model: str = "icon_seamless",
+        daily: bool = True,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Open-Meteo アンサンブル気象予報（確率分布 P10/P50/P90・標準偏差）を取得する"""
+        call = {
+            "latitude": lat,
+            "longitude": lon,
+            "variables": list(variables) if isinstance(variables, (list, tuple)) else variables,
+            "model": model,
+            "daily": daily,
+            "start_date": start_date,
+            "end_date": end_date,
+            **kwargs,
+        }
+        return self._cached_fetch(
+            "meteo", "fetch_open_meteo_ensemble", "weather_ensemble",
+            call, 6, call,
+        )
+
     def get_economic(
         self, indicators: list[str], countries: str = "all", **kwargs: Any
     ) -> pl.DataFrame:
-        """世界銀行から経済指標を取得するわ"""
+        """世界銀行から経済指標を取得する"""
         return self._cached_fetch(
             "worldbank", "fetch_worldbank_data", "worldbank",
             {"indicators": sorted(indicators), "countries": countries, **kwargs}, 168,  # 1 week
@@ -111,11 +139,35 @@ class OpenDataHub:
     def get_trends(
         self, keywords: list[str], geo: str = "JP", **kwargs: Any
     ) -> pl.DataFrame:
-        """Googleトレンドを取得するわ"""
+        """Googleトレンドを取得する"""
         return self._cached_fetch(
             "trends", "fetch_google_trends", "trends",
             {"keywords": sorted(keywords), "geo": geo, **kwargs}, 24,
             {"keywords": keywords, "geo": geo, **kwargs},
+        )
+
+    def get_wikipedia_views(
+        self,
+        articles: str | Sequence[str],
+        lang: str = "ja",
+        granularity: str = "daily",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """Wikipedia 記事の日次/月次ページビュー数（消費者関心の先行指標）を取得する (APIキー不要)"""
+        art_param = list(articles) if isinstance(articles, (list, tuple)) else articles
+        call = {
+            "articles": art_param,
+            "lang": lang,
+            "granularity": granularity,
+            "start_date": start_date,
+            "end_date": end_date,
+            **kwargs,
+        }
+        return self._cached_fetch(
+            "wikipedia", "fetch_wikipedia_pageviews", "wikipedia",
+            call, 24, call,
         )
 
     def get_freight(
@@ -125,7 +177,7 @@ class OpenDataHub:
         end_date: str | None = None,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        """物流・海運コスト指標を取得するわ"""
+        """物流・海運コスト指標を取得する"""
         return self._cached_fetch(
             "freight", "fetch_freight_data", "freight",
             {"tickers": tickers, "start": start_date, "end": end_date, **kwargs}, 24,
@@ -139,7 +191,7 @@ class OpenDataHub:
         end_date: str | None = None,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        """FREDからマクロ経済指標を取得するわ"""
+        """FREDからマクロ経済指標を取得する"""
         return self._cached_fetch(
             "fred", "fetch_fred_data", "fred",
             {"id": series_id, "start": start_date, "end": end_date, **kwargs}, 168,
@@ -153,7 +205,7 @@ class OpenDataHub:
         end_date: str | None = None,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        """Yahoo Financeから市場データを取得するわ"""
+        """Yahoo Financeから市場データを取得する"""
         return self._cached_fetch(
             "yahoo", "fetch_yahoo_finance", "yahoo",
             {"symbol": symbol, "start": start_date, "end": end_date, **kwargs}, 12,  # Market data changes often
@@ -166,9 +218,9 @@ class OpenDataHub:
         countries: str = "all",
         start_year: int | None = None,
         end_year: int | None = None,
-        **kwargs: Any
+        **kwargs: Any,
     ) -> pl.DataFrame:
-        """OECDから詳細な経済統計（QNA/SNA/MEI等）を取得するわ"""
+        """OECDから詳細な経済統計（QNA/SNA/MEI等）を取得する"""
         return self._cached_fetch(
             "oecd", "fetch_oecd_data", "oecd",
             {"dataset": dataset, "countries": countries, "start": start_year, "end": end_year, **kwargs},
@@ -180,7 +232,7 @@ class OpenDataHub:
     def get_estat(
         self, stats_data_id: str, app_id: str | None = None, **kwargs: Any
     ) -> pl.DataFrame:
-        """e-Statから日本の公的統計を取得するわ"""
+        """e-Statから日本の公的統計を取得する"""
         params = {"id": stats_data_id, **kwargs}
         cached = self.cache.get("estat", params)
         if cached is not None:
@@ -218,23 +270,28 @@ class OpenDataHub:
     def get_commodity_proxies(
         self, industry: str, start_date: str | None = None, end_date: str | None = None, **kwargs: Any
     ) -> pl.DataFrame:
-        """指定された全18産業に関連するコモディティ価格や為替のプロキシ指標を取得するわ"""
+        """指定された全18産業に関連するコモディティ価格や為替のプロキシ指標を取得する"""
         if industry not in self.INDUSTRY_COMMODITY_MAP:
-            raise ValueError(f"❌ Unknown industry: {industry}. Available: {list(self.INDUSTRY_COMMODITY_MAP.keys())}")
+            raise ValueError(f"Unknown industry: {industry}. Available: {list(self.INDUSTRY_COMMODITY_MAP.keys())}")
 
         tickers = " ".join(self.INDUSTRY_COMMODITY_MAP[industry])
         return self.get_yahoo(symbol=tickers, start_date=start_date, end_date=end_date, **kwargs)
 
     def get_global_macro(
-        self, region: str, indicators: list[str] | None = None, start_year: int | None = None, end_year: int | None = None, **kwargs: Any
+        self,
+        region: str,
+        indicators: list[str] | None = None,
+        start_year: int | None = None,
+        end_year: int | None = None,
+        **kwargs: Any,
     ) -> pl.DataFrame:
-        """CNやEUなどのグローバルマクロ指標をプリセットで取得するわ"""
+        """CNやEUなどのグローバルマクロ指標をプリセットで取得する"""
         region_map = {
             "CN": "CHN",
             "EU": "EUU",
             "US": "USA",
             "JP": "JPN",
-            "EA": "EMU" # Euro Area
+            "EA": "EMU",  # Euro Area
         }
         code = region_map.get(region.upper(), region)
         inds = indicators or ["gdp", "inflation", "unemployment"]
@@ -242,38 +299,37 @@ class OpenDataHub:
         return self.get_economic(indicators=inds, countries=code, start_year=start_year, end_year=end_year, **kwargs)
 
     def get_china_macro(self, start_year: int | None = None, end_year: int | None = None, **kwargs: Any) -> pl.DataFrame:
-        """中国 (NBS相当) の主要マクロ指標をワンクリックで取得するプリセットよ"""
+        """中国 (NBS相当) の主要マクロ指標をワンクリックで取得するプリセット"""
         return self.get_global_macro(
             region="CHN",
             indicators=["gdp_growth", "inflation", "unemployment", "gni"],
             start_year=start_year,
             end_year=end_year,
-            **kwargs
+            **kwargs,
         )
 
     def get_europe_macro(self, start_year: int | None = None, end_year: int | None = None, **kwargs: Any) -> pl.DataFrame:
-        """欧州 (Eurostat相当) の主要マクロ指標をワンクリックで取得するプリセットよ"""
-        # 欧州全体 (EUU) とユーロ圏 (EMU) を対象に取得
+        """欧州 (Eurostat相当) の主要マクロ指標をワンクリックで取得するプリセット"""
         return self.get_global_macro(
             region="EUU,EMU",
             indicators=["gdp_growth", "inflation", "unemployment", "gdp"],
             start_year=start_year,
             end_year=end_year,
-            **kwargs
+            **kwargs,
         )
 
     def get_us_macro(self, start_year: int | None = None, end_year: int | None = None, **kwargs: Any) -> pl.DataFrame:
-        """米国 (BEA/BLS相当) の主要マクロ指標をワンクリックで取得するプリセットよ"""
+        """米国 (BEA/BLS相当) の主要マクロ指標をワンクリックで取得するプリセット"""
         return self.get_global_macro(
             region="USA",
             indicators=["gdp_growth", "inflation", "unemployment", "gdp"],
             start_year=start_year,
             end_year=end_year,
-            **kwargs
+            **kwargs,
         )
 
     # ========================================================================
-    # v2.1 Extensions: SCM/需要予測向け先行指標・リスク・補完フェッチャー
+    # SCM/需要予測向け先行指標・リスク・補完フェッチャー
     # ========================================================================
 
     def _cached_fetch(
@@ -350,7 +406,6 @@ class OpenDataHub:
 
     def get_semicon(self, series: str = "us_semi_shipments", **kwargs: Any) -> pl.DataFrame:
         """半導体業界指標 (出荷/在庫/B2B比)"""
-        # book_to_bill のみ compute_book_to_bill を呼ぶ特殊ケース
         if series == "book_to_bill":
             return self._cached_fetch(
                 "semicon", "compute_book_to_bill", "semicon",
@@ -395,8 +450,10 @@ class OpenDataHub:
             call,
         )
 
-    def get_edinet_financials(self, edinet_code: str, period: str = "annual", years: int | None = None, **kwargs: Any) -> pl.DataFrame:
-        """EDINET DBから財務データを取得するわ (edinetdb利用)"""
+    def get_edinet_financials(
+        self, edinet_code: str, period: str = "annual", years: int | None = None, **kwargs: Any
+    ) -> pl.DataFrame:
+        """EDINET DBから財務データを取得する (edinetdb利用)"""
         call = {"edinet_code": edinet_code, "period": period, "years": years, **kwargs}
         return self._cached_fetch(
             "edinet", "fetch_edinet_financials", "edinet_financials", call, 24,
@@ -404,7 +461,7 @@ class OpenDataHub:
         )
 
     def get_edinet_ratios(self, edinet_code: str, **kwargs: Any) -> pl.DataFrame:
-        """EDINET DBから財務比率データを取得するわ (edinetdb利用)"""
+        """EDINET DBから財務比率データを取得する (edinetdb利用)"""
         call = {"edinet_code": edinet_code, **kwargs}
         return self._cached_fetch(
             "edinet", "fetch_edinet_ratios", "edinet_ratios", call, 24,
@@ -412,30 +469,177 @@ class OpenDataHub:
         )
 
     # ========================================================================
-    # 日本の先行指標プリセット (景気動向指数 / 短観 / 訪日外客数)
+    # 日本の先行指標・需要予測プリセット (日銀 / e-Stat 各種統計)
     # ========================================================================
 
+    def get_boj(self, series: str = "tankan_large_mfg", db: str | None = None, **kwargs: Any) -> pl.DataFrame:
+        """日銀 時系列統計（短観DI、企業物価指数CGPI、SPPI、マネーストック等）を取得する"""
+        call = {"series": series, "db": db, **kwargs}
+        return self._cached_fetch(
+            "boj", "fetch_boj_data", "boj", call, 168,
+            call,
+        )
+
     def get_boj_tankan(self, series: str = "tankan_large_mfg", **kwargs: Any) -> pl.DataFrame:
-        """日銀 短観の業況判断DIなどを取得するわ (BOJ時系列API・キー不要)"""
+        """日銀 短観の業況判断DIなどを取得する (BOJ時系列API・キー不要)"""
         call = {"series": series, **kwargs}
         return self._cached_fetch(
             "boj", "fetch_boj_data", "boj", call, 168,
             call,
         )
 
-    def get_keiki_di(self, **kwargs: Any) -> pl.DataFrame:
-        """内閣府 景気動向指数 (CI/DI、先行指数を含む) を e-Stat 経由で取得するわ。
+    def get_cgpi(self, series: str = "cgpi_all", **kwargs: Any) -> pl.DataFrame:
+        """日銀 企業物価指数 (CGPI: 国内・輸出・輸入) / SPPI を取得する (APIキー不要)"""
+        return self.get_boj(series=series, **kwargs)
 
-        表章項目=CI指数 × 系列=先行指数 などはメタの名称列で絞り込めるわよ。
+    @staticmethod
+    def _filter_estat_text(df: pl.DataFrame, query: str) -> pl.DataFrame:
+        """DataFrame 内の文字列カラムに query を含む行のみを抽出するヘルパー"""
+        if df.is_empty():
+            return df
+        str_cols = [c for c, dt in zip(df.columns, df.dtypes, strict=False) if dt == pl.String and c not in ("date", "value", "unit")]
+        if not str_cols:
+            return df
+        cond = pl.lit(False)
+        for c in str_cols:
+            cond = cond | pl.col(c).str.contains(query, literal=True).fill_null(False)
+        return df.filter(cond)
+
+    def get_keiki_di(self, series: str | None = None, **kwargs: Any) -> pl.DataFrame:
+        """内閣府 景気動向指数 (CI/DI、先行指数を含む) を e-Stat 経由で取得する。
+
+        series に '先行指数' や '一致指数' を指定すると該当系列のみに絞り込む。
         """
-        return self.get_estat(stats_data_id="0003446461", **kwargs)
+        df = self.get_estat(stats_data_id="0003446461", **kwargs)
+        if series:
+            df = self._filter_estat_text(df, series)
+        return df
 
-    def get_inbound_visitors(self, **kwargs: Any) -> pl.DataFrame:
-        """訪日外客数 (港別 入国外国人の国籍・地域、月次) を e-Stat 経由で取得するわ。
+    def get_inbound_visitors(self, country: str | None = None, **kwargs: Any) -> pl.DataFrame:
+        """訪日外客数 (港別 入国外国人の国籍・地域、月次) を e-Stat 経由で取得する。
 
-        港 × 国籍・地域 の粒度なので、国別月次合計は港次元で集計してね。
+        country に '韓国' や '中国'、'総数' 等を指定すると該当国籍・地域のみに絞り込む。
         """
-        return self.get_estat(stats_data_id="0003449064", **kwargs)
+        df = self.get_estat(stats_data_id="0003449064", **kwargs)
+        if country:
+            df = self._filter_estat_text(df, country)
+        return df
+
+    def get_retail_sales(self, **kwargs: Any) -> pl.DataFrame:
+        """経産省 商業動態統計（業態別・商品別小売販売額・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003355268", **kwargs)
+
+    def get_industrial_production(self, **kwargs: Any) -> pl.DataFrame:
+        """経産省 鉱工業指数 IIP（生産・出荷・在庫指数・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003335036", **kwargs)
+
+    def get_housing_starts(self, **kwargs: Any) -> pl.DataFrame:
+        """国交省 建築着工統計調査（新設住宅着工戸数・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003103532", **kwargs)
+
+    def get_economy_watchers(self, **kwargs: Any) -> pl.DataFrame:
+        """内閣府 景気ウォッチャー調査（現状・先行き判断DI・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003348423", **kwargs)
+
+    def get_household_spending(self, **kwargs: Any) -> pl.DataFrame:
+        """総務省 家計調査（二人以上の世帯・品目分類別支出・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003343671", **kwargs)
+
+    def get_monthly_wages(self, **kwargs: Any) -> pl.DataFrame:
+        """厚労省 毎月勤労統計調査（現金給与総額・実質賃金指数・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003318162", **kwargs)
+
+    def get_population(self, **kwargs: Any) -> pl.DataFrame:
+        """総務省 人口推計（各月1日現在人口）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003448237", **kwargs)
+
+    def get_cpi(self, **kwargs: Any) -> pl.DataFrame:
+        """総務省 2020年基準消費者物価指数（全国・月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003427113", **kwargs)
+
+    def get_labor_force(self, **kwargs: Any) -> pl.DataFrame:
+        """総務省 労働力調査（基本集計・全国月次）を e-Stat 経由で取得する"""
+        return self.get_estat(stats_data_id="0003005798", **kwargs)
+
+    # ========================================================================
+    # 地理・環境・交通・SNS・その他フェッチャー統合メソッド
+    # ========================================================================
+
+    def get_air_quality(self, lat: float, lon: float, **kwargs: Any) -> pl.DataFrame:
+        """大気質・花粉・PM2.5データを取得する (Open-Meteo Air Quality)"""
+        call = {"latitude": lat, "longitude": lon, **kwargs}
+        return self._cached_fetch("air_quality", "fetch_air_quality", "air_quality", call, 12, call)
+
+    def get_river(self, lat: float, lon: float, **kwargs: Any) -> pl.DataFrame:
+        """河川流量・洪水リスクデータを取得する (Open-Meteo GloFAS)"""
+        call = {"latitude": lat, "longitude": lon, **kwargs}
+        return self._cached_fetch("river", "fetch_river_discharge", "river", call, 12, call)
+
+    def get_holiday(self, **kwargs: Any) -> pl.DataFrame:
+        """内閣府 日本の国民の祝日データを取得する"""
+        return self._cached_fetch("holiday", "fetch_japan_holidays", "holiday", kwargs, 720, kwargs)
+
+    def get_events(self, year: int | None = None, country_code: str = "JP", **kwargs: Any) -> pl.DataFrame:
+        """国別の祝日・カレンダーイベントフラグを取得する (Nager.Date API)"""
+        call = {"year": year, "country_code": country_code, **kwargs}
+        return self._cached_fetch("events", "fetch_events_data", "events", call, 720, call)
+
+    def get_mlit(self, year: int, area: str, **kwargs: Any) -> pl.DataFrame:
+        """国交省 不動産情報ライブラリから不動産取引価格・地価を取得する"""
+        call = {"year": year, "area": area, **kwargs}
+        return self._cached_fetch("mlit", "fetch_land_prices", "mlit", call, 720, call)
+
+    def get_odpt(self, rdf_type: str, **kwargs: Any) -> pl.DataFrame:
+        """ODPT 公共交通オープンデータから運行・時刻表データを取得する"""
+        call = {"rdf_type": rdf_type, **kwargs}
+        return self._cached_fetch("odpt", "fetch_odpt_data", "odpt", call, 6, call)
+
+    def get_plateau(self, query: str, **kwargs: Any) -> pl.DataFrame:
+        """3D都市モデル PLATEAU のデータセットを検索・取得する"""
+        call = {"query": query, **kwargs}
+        return self._cached_fetch("plateau", "fetch_plateau_model", "plateau", call, 720, call)
+
+    def get_jshis(self, lat: float, lon: float, **kwargs: Any) -> pl.DataFrame:
+        """J-SHIS 地震ハザードステーションから地点別地震リスクを取得する"""
+        call = {"lat": lat, "lon": lon, **kwargs}
+        return self._cached_fetch("jshis", "fetch_jshis_risk", "jshis", call, 720, call)
+
+    def get_power(self, area: str = "tokyo", date: str | None = None, **kwargs: Any) -> pl.DataFrame:
+        """電力需給実績データ (TEPCO でんき予報) を取得する"""
+        call = {"area": area, "date": date, **kwargs}
+        return self._cached_fetch("power", "fetch_power_usage", "power", call, 6, call)
+
+    def get_gsi(self, query: str, **kwargs: Any) -> pl.DataFrame:
+        """国土地理院ジオコーディングAPIから住所・地名の緯度経度を取得する"""
+        call = {"query": query, **kwargs}
+        return self._cached_fetch("gsi", "fetch_gsi_msearch", "gsi", call, 720, call)
+
+    def get_zipcode(self, zipcode: str, **kwargs: Any) -> pl.DataFrame:
+        """郵便番号から住所情報を取得する (zipcloud)"""
+        call = {"zipcode": zipcode, **kwargs}
+        return self._cached_fetch("zipcode", "fetch_zipcode", "zipcode", call, 720, call)
+
+    def get_corp(self, target: str, mode: str = "name", **kwargs: Any) -> pl.DataFrame:
+        """国税庁 法人番号公表サイトAPIから企業情報を取得する"""
+        call = {"target": target, "mode": mode, **kwargs}
+        return self._cached_fetch("corp", "fetch_corporate_info", "corp", call, 720, call)
+
+    def get_ckan(
+        self, query: str, base_url: str = "https://data.e-gov.go.jp/data", rows: int = 10, **kwargs: Any
+    ) -> pl.DataFrame:
+        """e-Gov データポータル等の CKAN カタログからCSVリソースを検索する"""
+        call = {"base_url": base_url, "query": query, "rows": rows, **kwargs}
+        return self._cached_fetch("ckan", "search_ckan", "ckan", call, 24, call)
+
+    def get_youtube(self, video_id: str, max_results: int = 100, **kwargs: Any) -> pl.DataFrame:
+        """YouTube Data API v3 から動画コメントを取得する"""
+        call = {"video_id": video_id, "max_results": max_results, **kwargs}
+        return self._cached_fetch("youtube", "fetch_youtube_comments", "youtube", call, 24, call)
+
+    def get_x_grok(self, query: str, limit: int = 10, **kwargs: Any) -> pl.DataFrame:
+        """xAI Grok API 経由で X (旧Twitter) のトレンド・センチメントを取得する"""
+        call = {"query": query, "limit": limit, **kwargs}
+        return self._cached_fetch("x_grok", "fetch_x_grok", "x_grok", call, 6, call)
 
     @staticmethod
     def _is_degenerate(df: pl.DataFrame) -> bool:
@@ -451,10 +655,31 @@ class OpenDataHub:
     def _normalize_df(df: pl.DataFrame) -> pl.DataFrame:
         """カラム名を date / value へ標準化する（hub→下流の契約）。
 
-        CSV経由・戻り値経由のどちらの取得経路でも同じ正規化を適用する。
-        複数列が同じ正規化名に衝突する場合は最初の1列だけ採用し、rename の
-        DuplicateError（→従来は黙って空DF化）を防ぐ。冪等。
+        - WorldBank の横持ち (YR2020, YR2021, ...) は縦持ち (date, value) へ unpivot する。
+        - OECD の TIME_PERIOD 等も date に正規化する。
+        - 複数列が同じ正規化名に衝突する場合は最初の1列だけ採用し、rename の
+          DuplicateError を防ぐ。冪等。
         """
+        if df.is_empty():
+            return df
+
+        yr_cols = [c for c in df.columns if re.fullmatch(r"YR\d{4}", c)]
+        if yr_cols and "date" not in df.columns and "value" not in df.columns:
+            id_cols = [c for c in df.columns if c not in yr_cols]
+            df = (
+                df.unpivot(
+                    on=yr_cols,
+                    index=id_cols,
+                    variable_name="date",
+                    value_name="value",
+                )
+                .with_columns(
+                    pl.col("date").str.strip_prefix("YR"),
+                    pl.col("value").cast(pl.Float64, strict=False),
+                )
+            )
+            return df
+
         mapping: dict[str, str] = {}
         used: set[str] = set()
 
@@ -465,7 +690,7 @@ class OpenDataHub:
 
         for col in df.columns:
             c_low = col.lower()
-            if c_low in ["date", "time", "時間"]:
+            if c_low in ["date", "time", "時間", "time_period"]:
                 _claim(col, "date")
             elif c_low in ["value", "close", "adj close", "値"]:
                 _claim(col, "value")

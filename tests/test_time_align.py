@@ -7,8 +7,6 @@ import datetime as dt
 
 import polars as pl
 import pytest
-
-
 from time_align import align_frequency, align_many
 
 
@@ -181,3 +179,22 @@ def test_filter_val_matching_no_rows_raises() -> None:
     })
     with pytest.raises(ValueError, match="matched no rows"):
         align_frequency(df, filter_col="series", filter_val="leadng")
+
+
+def test_parse_dates_supports_year_quarter_and_japanese_formats() -> None:
+    """OECD/WorldBank等の4桁年(YYYY)、四半期(YYYY-Q1)、和暦月(YYYY年M月)を解析できる。"""
+    from time_align import parse_dates
+
+    assert parse_dates(pl.Series("d", ["2022", "2023"])).to_list() == [
+        dt.date(2022, 1, 1),
+        dt.date(2023, 1, 1),
+    ]
+    assert parse_dates(pl.Series("d", ["2024-Q1", "2024-Q3"])).to_list() == [
+        dt.date(2024, 1, 1),
+        dt.date(2024, 7, 1),
+    ]
+    assert parse_dates(pl.Series("d", ["2024年1月", "2024年12月"])).to_list() == [
+        dt.date(2024, 1, 1),
+        dt.date(2024, 12, 1),
+    ]
+

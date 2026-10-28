@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-
 from jshis_fetcher import fetch_jshis_risk
 
 

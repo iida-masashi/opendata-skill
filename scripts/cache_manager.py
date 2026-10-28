@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -30,7 +29,7 @@ class CacheManager:
     def _load_metadata(self) -> dict[str, Any]:
         if self.metadata_file.exists():
             try:
-                with open(self.metadata_file, encoding="utf-8") as f:
+                with self.metadata_file.open(encoding="utf-8") as f:
                     return cast(dict[str, Any], json.load(f))
             except Exception as e:
                 logging.warning(f"Failed to load cache metadata: {e}")
@@ -40,7 +39,7 @@ class CacheManager:
         tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             write(tmp)
-            os.replace(tmp, path)
+            tmp.replace(path)
         finally:
             if tmp.exists():
                 tmp.unlink()

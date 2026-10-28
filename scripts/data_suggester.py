@@ -1,5 +1,6 @@
 import argparse
 import os
+from pathlib import Path
 
 from api_utils import cli_entry
 
@@ -9,13 +10,10 @@ def suggest_data(keyword: str) -> None:
     Suggests relevant Open Data APIs based on a keyword (Industry, Product, Use Case).
     Parses INDUSTRY_GUIDE.md for matches.
     """
+    script_dir = Path(__file__).resolve().parent
+    guide_path = script_dir.parent / "references" / "INDUSTRY_GUIDE.md"
 
-    # Path to INDUSTRY_GUIDE.md
-    # Assuming script is in opendata-skill/scripts/ and guide is in opendata-skill/references/  # noqa: E501
-    script_dir = os.path.dirname(os.path.abspath(__file__))  # noqa: PTH100, PTH120
-    guide_path = os.path.join(script_dir, "..", "references", "INDUSTRY_GUIDE.md")  # noqa: PTH118
-
-    if not os.path.exists(guide_path):  # noqa: PTH110
+    if not os.path.exists(guide_path):
         raise FileNotFoundError(f"INDUSTRY_GUIDE.md not found: {guide_path}")
 
     print(f"Searching for data sources related to: '{keyword}'...")
@@ -24,9 +22,9 @@ def suggest_data(keyword: str) -> None:
     found = False
     current_section = ""
 
-    with open(guide_path, encoding="utf-8") as f:  # noqa: PTH123
-        for line in f:
-            line = line.strip()  # noqa: PLW2901
+    with guide_path.open(encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
 
             # Track sections
             if line.startswith("## "):
@@ -36,7 +34,7 @@ def suggest_data(keyword: str) -> None:
             if "|" in line and keyword.lower() in line.lower():
                 # Format: | Use Case | Source | Script | Description |
                 parts = [p.strip() for p in line.split("|") if p.strip()]
-                if len(parts) >= 4:  # noqa: PLR2004
+                if len(parts) >= 4:
                     print(f"[{current_section}]")
                     print(f"  Use Case:    {parts[0]}")
                     print(f"  Source:      {parts[1].replace('**', '')}")
@@ -47,14 +45,16 @@ def suggest_data(keyword: str) -> None:
 
     if not found:
         print("No exact matches found in the guide.")
-        print("Try broader keywords like 'Manufacturing', 'Retail', 'Price', 'Weather'.")  # noqa: E501
+        print("Try broader keywords like 'Manufacturing', 'Retail', 'Price', 'Weather'.")
+
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Suggest Open Data APIs for a given industry/keyword.")  # noqa: E501
-    parser.add_argument("keyword", help="Keyword to search (e.g., 'Logistics', 'Price', 'Tourism')")  # noqa: E501
+    parser = argparse.ArgumentParser(description="Suggest Open Data APIs for a given industry/keyword.")
+    parser.add_argument("keyword", help="Keyword to search (e.g., 'Logistics', 'Price', 'Tourism')")
 
     args = parser.parse_args()
     suggest_data(args.keyword)
+
 
 if __name__ == "__main__":
     cli_entry(main)

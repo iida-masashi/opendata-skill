@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-
-
 from feature_engineer import engineer_features
 from odpt_fetcher import fetch_odpt_data
 from semicon_fetcher import compute_book_to_bill

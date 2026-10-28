@@ -8,8 +8,6 @@ from unittest.mock import patch
 
 import pytest
 import requests
-
-
 from api_utils import _is_transient, retry_with_ratelimit
 
 

@@ -4,7 +4,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from ckan_fetcher import search_ckan
 
 

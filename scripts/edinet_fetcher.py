@@ -3,23 +3,23 @@ from typing import Any
 
 import httpx
 import polars as pl
+from api_utils import cli_entry, save_output
 from dotenv import load_dotenv
 from edinetdb import client as edinet_client
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
-
-from api_utils import cli_entry, save_output
 
 # 環境変数を読み込む
 load_dotenv()
 
 
 # edinetdb は httpx と独自例外を使うため api_utils のリトライ判定に乗らない。
-# 一時的なエラー（429 / 5xx / 接続・タイムアウト）のみ再試行する。
+# 一時的なエラー（5xx / 接続・タイムアウト）のみ再試行する。
+# RateLimitError は edinetdb の日次/月次クォータ上限到達を意味するため即時送出する。
 @retry(
     wait=wait_exponential(multiplier=1, min=2, max=10),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type(
-        (edinet_client.RateLimitError, edinet_client.ServerError, httpx.TransportError)
+        (edinet_client.ServerError, httpx.TransportError)
     ),
     reraise=True,
 )

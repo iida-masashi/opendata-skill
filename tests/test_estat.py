@@ -9,8 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
+from estat_fetcher import (
+    ESTAT_PRESETS,
+    as_list,
+    check_estat_result,
+    fetch_estat_data,
+    format_estat_date,
+)
 
-from estat_fetcher import as_list, check_estat_result, fetch_estat_data
 from scripts.opendata_hub import OpenDataHub
 
 
@@ -255,3 +261,28 @@ def test_fetch_estat_undeclared_non_numeric_value_is_kept(mock_get: MagicMock, m
     df = fetch_estat_data(app_id="k", stats_data_id="0000000001")
     assert df["value"].to_list() == ["100", "?"]
     assert "value_note" not in df.columns
+
+
+def test_format_estat_date_10_digit_code() -> None:
+    """e-Stat 10桁時間コード (YYYYPPSSSS: 例 2024000505 = 2024年5月) が 20240501 に変換される。"""
+    assert format_estat_date("2024000505") == "20240501"
+    assert format_estat_date("2024001212") == "20241201"
+    assert format_estat_date("2024000000") == "20240101"
+    assert format_estat_date("202405") == "20240501"
+    assert format_estat_date("2024年5月") == "2024年5月"
+
+
+@patch("estat_fetcher.requests.get")
+def test_fetch_estat_follows_next_key_pagination(mock_get: MagicMock, make_response) -> None:
+    """RESULT_INF.NEXT_KEY がある場合、startPosition を指定して全ページを取得・結合する。"""
+    page1 = _make_estat_response(2)
+    page1["GET_STATS_DATA"]["STATISTICAL_DATA"]["RESULT_INF"]["NEXT_KEY"] = "3"
+    page2 = _make_estat_response(1)
+    mock_get.side_effect = [make_response(json=page1), make_response(json=page2)]
+
+    df = fetch_estat_data("dummy", "retail_sales")
+    assert df.height == 3
+    assert mock_get.call_count == 2
+    assert mock_get.call_args_list[0].kwargs["params"]["statsDataId"] == ESTAT_PRESETS["retail_sales"]
+    assert mock_get.call_args_list[1].kwargs["params"]["startPosition"] == "3"
+

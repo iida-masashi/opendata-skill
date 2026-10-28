@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 import requests
-
 from fred_fetcher import fetch_fred_alias, fetch_fred_data
 
 _OBS = {

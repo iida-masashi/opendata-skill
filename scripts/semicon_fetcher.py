@@ -1,9 +1,8 @@
 import argparse
 
 import polars as pl
-from dotenv import load_dotenv
-
 from api_utils import cli_entry, save_output
+from dotenv import load_dotenv
 from fred_fetcher import fetch_fred_alias
 
 load_dotenv()

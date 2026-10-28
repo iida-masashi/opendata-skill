@@ -3,8 +3,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-
 from boj_fetcher import SERIES_ALIAS, fetch_boj_data
 
 # Real BOJ getDataCode CSV: a metadata preamble precedes the SERIES_CODE header.
@@ -141,3 +139,14 @@ def test_fetch_boj_http_error_keeps_api_message(mock_get: MagicMock, make_respon
     )
     with pytest.raises(requests.exceptions.HTTPError, match="M181013E"):
         fetch_boj_data(series="TKXXXX")
+
+
+@patch("boj_fetcher.requests.get")
+def test_fetch_boj_cgpi_alias_auto_selects_pr01_db(mock_get: MagicMock, make_response) -> None:
+    """cgpi_all エイリアス指定時に db='PR01' が自動選択される。"""
+    mock_get.return_value = make_response(text=MOCK_CSV)
+    fetch_boj_data(series="cgpi_all")
+    params = mock_get.call_args[1]["params"]
+    assert params["code"] == SERIES_ALIAS["cgpi_all"]
+    assert params["db"] == "PR01"
+

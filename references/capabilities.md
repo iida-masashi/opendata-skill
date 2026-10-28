@@ -1,119 +1,128 @@
 ## 📊 データカテゴリと取得可能なデータ一覧 (Capabilities)
 
-本スキル (`opendata-skill`) は、SCMの需要予測やマーケティング分析に必要な外部要因（市況、天候、トレンド等）を単一のインターフェースで取得できる統合ハブです。
+本スキル (`opendata-skill`) は、SCMの需要予測・S&OPやマーケティング分析に必要な外部要因（市況、天候・アンサンブル確率予報、検索・閲覧トレンド、物価・景気先行指標等）を単一のインターフェース（`OpenDataHub`）で取得できる統合ハブです。
 
 ### 1. 📈 経済・金融 (Economy & Finance)
 マクロ経済指標や市場データを取得し、需要変動の外部要因として活用します。
 
 *   **EDINET DB (`edinet_fetcher.py`)**
     *   **取得データ**: 日本の上場企業の財務データ (売上高、営業利益、総資産など) および財務比率 (ROE、ROAなど)。
-    *   **特徴**: `edinetdb` パッケージを利用して簡単に取得可能。
+    *   **特徴**: `edinetdb` パッケージを利用して簡単に取得可能。`hub.get_edinet_financials()`。
 *   **Yahoo Finance (`yahoo_fetcher.py`)**
     *   **取得データ**: 株価 (日米欧)、為替 (FX)、コモディティ価格 (原油、銅など)、株価指数。OHLCV (Open, High, Low, Close, Volume)。
-    *   **特徴**: ETF等への自動フォールバック機能付き。
+    *   **特徴**: ETF等への自動フォールバック機能付き。`hub.get_yahoo()`。
 *   **World Bank (`worldbank_fetcher.py`)**
     *   **取得データ**: 各国のGDP、インフレ率 (CPI)、人口推移、貿易収支など。
-    *   **特徴**: `gdp`, `inflation` などのエイリアスで簡単に指定可能。
+    *   **特徴**: `gdp`, `inflation` などのエイリアスで簡単に指定可能。Hub 経由では横持ち (`YR2022` 等) を自動で縦持ち (`date`, `value`) に正規化。`hub.get_economic()`。
 *   **OECD (`oecd_fetcher.py`)**
-    *   **取得データ**: MEI (主要経済指標)、労働市場データなど、先進国の詳細な経済統計。
+    *   **取得データ**: MEI (主要経済指標)、労働市場データなど、先進国の詳細な経済統計。`hub.get_oecd()`。
 *   **e-Stat (`estat_fetcher.py`)**
-    *   **取得データ**: 日本の政府統計。国勢調査、消費者物価指数 (CPI)、毎月勤労統計、機械受注など。
+    *   **取得データ**: 日本の政府統計。国勢調査、消費者物価指数 (CPI)、労働力調査、および需要予測・S&OP向けプリセット（商業動態統計 `retail_sales`、鉱工業生産指数 `industrial_production`、新設住宅着工統計 `housing_starts`、景気ウォッチャー調査 `economy_watchers`、家計調査 `household_spending`、毎月勤労統計 `monthly_wages`）。
+    *   **特徴**: 10万件超データの `NEXT_KEY` 自動ページング、10桁時間コード（`YYYYPPSSSS`）の標準日付変換を内蔵。Hub の `get_estat()`, `get_retail_sales()`, `get_industrial_production()`, `get_housing_starts()`, `get_economy_watchers()`, `get_household_spending()`, `get_monthly_wages()`, `get_population()`, `get_cpi()`, `get_labor_force()` で呼び出し可能。
 *   **FRED (`fred_fetcher.py`)**
-    *   **取得データ**: 米国のマクロ経済指標。政策金利、失業率、インフレ指標など。
+    *   **取得データ**: 米国のマクロ経済指標。政策金利、失業率、インフレ指標など。`hub.get_fred()`。
 *   **Logistics (`freight_fetcher.py`)**
-    *   **取得データ**: バルチック海運指数 (BDI) や物流関連ETFの価格データ。サプライチェーンの逼迫度を示す。
+    *   **取得データ**: バルチック海運指数連動ETF (BDRY) や物流・海運関連銘柄の価格データ。サプライチェーンの逼迫度を示す。`hub.get_freight()`。
 
 ### 2. 🌤️ 環境・インフラ (Environment & Infrastructure)
 天候や電力データを取得し、季節性商品やエネルギー消費の分析に活用します。
 
 *   **Open-Meteo (`meteo_fetcher.py`)**
-    *   **取得データ**: 過去の気象データおよび予報。気温、降水量、風速、日射量など（1時間ごと／日次）。
-    *   **特徴**: APIキー不要で高精度な座標指定が可能。
+    *   **取得データ**: 過去の気象データ（ERA5アーカイブ）、確定予報（1時間ごと／日次）、および **アンサンブル気象予報（`fetch_open_meteo_ensemble` / `hub.get_weather_ensemble()`）**。
+    *   **特徴**: APIキー不要で高精度な座標指定が可能。アンサンブル予報は複数メンバー（ICON/GFS/ECMWF等）から気温・降水量の **P10 / P50 / P90 分位点・平均・標準偏差** を算出し、確率的需要予測や安全在庫の算出に直接利用可能。
 *   **Open-Meteo Air Quality (`air_quality_fetcher.py`)**
-    *   **取得データ**: 大気質データ。PM2.5、NO2、オゾン濃度など。
+    *   **取得データ**: 大気質データ。PM2.5、NO2、オゾン濃度など。`hub.get_air_quality()`。
 *   **TEPCO (`power_fetcher.py`)**
-    *   **取得データ**: 東京電力管内の電力使用状況（1時間ごとの当日実績・予測値・使用率・供給力、2022年4月以降）。`date` 指定でその日の24時間分、省略で当年1月から最新日まで。
+    *   **取得データ**: 東京電力管内の電力使用状況（1時間ごとの当日実績・予測値・使用率・供給力、2022年4月以降）。`date` 指定でその日の24時間分、省略で当年1月から最新日まで。`hub.get_power()`。
+*   **国交省 川の防災情報 (`river_fetcher.py`)**
+    *   **取得データ**: 河川水位・流量観測データ。`hub.get_river()`。
 
 ### 3. 🏙️ 地域・都市 (Regional & Urban)
 商圏分析や出店計画、不動産価値の評価に活用します。
 
 *   **MLIT (国土交通省) (`mlit_fetcher.py`)**
-    *   **取得データ**: 不動産取引価格、地価公示データ。
+    *   **取得データ**: 不動産取引価格、地価公示データ。`hub.get_mlit()`。
 *   **PLATEAU (`plateau_fetcher.py`)**
-    *   **取得データ**: 3D都市モデルデータ (CityGML/3D Tiles) のメタデータ。
+    *   **取得データ**: 3D都市モデルデータ (CityGML/3D Tiles) のメタデータ。`hub.get_plateau()`。
 *   **ODPT (`odpt_fetcher.py`)**
-    *   **取得データ**: 公共交通オープンデータ。時刻表、リアルタイム運行情報など。
+    *   **取得データ**: 公共交通オープンデータ。時刻表、リアルタイム運行情報など。`hub.get_odpt()`。
+*   **J-SHIS 地震ハザード (`jshis_fetcher.py`)**
+    *   **取得データ**: 地点座標の今後30年震度別地震発生確率・表層地盤増幅率。`hub.get_jshis()`。
 
 ### 4. 📢 トレンド・ソーシャル (Trends & Social)
 消費者の関心事やリアルタイムな評判を取得し、突発的な需要変動をキャッチします。
 
+*   **Wikimedia Pageviews (`wikipedia_fetcher.py`)** — v2.4 新規追加
+    *   **取得データ**: Wikipedia記事の日次・月次ページビュー数（言語プロジェクト別・記事タイトル別）。
+    *   **特徴**: APIキー不要・レート制限が緩やか（200 req/s）。Google Trends と異なり絶対閲覧数が得られ、季節性商品・疾患（インフルエンザ・花粉症等）・イベントの消費者関心度を高い再現性で取得可能。`hub.get_wikipedia_views()`。
 *   **Google Trends (`trends_fetcher.py`)**
-    *   **取得データ**: 検索キーワードの相対的関心度 (0-100)。
+    *   **取得データ**: 検索キーワードの相対的関心度 (0-100)。`hub.get_trends()`。
 *   **YouTube (`youtube_fetcher.py`)**
-    *   **取得データ**: 動画へのコメント、エンゲージメント（高評価数など）に基づくセンチメント分析。
+    *   **取得データ**: 動画へのコメント、エンゲージメント（高評価数など）に基づくセンチメント分析。`hub.get_youtube()`。
 *   **xAI (Grok) (`x_grok_fetcher.py`)**
-    *   **取得データ**: X (旧Twitter) のリアルタイム投稿データ（要Grok API）。
-*   **Events (`events_fetcher.py`)**
-    *   **取得データ**: 祝日情報、地域のイベントスケジュール。
+    *   **取得データ**: X (旧Twitter) のリアルタイム投稿データ（要Grok API）。`hub.get_x_grok()`。
+*   **Events / Holidays (`events_fetcher.py` / `holiday_fetcher.py`)**
+    *   **取得データ**: 日本の国民の祝日情報、商業イベント・地域のイベントスケジュール。`hub.get_events()`, `hub.get_holiday()`。
 
-### 5. 🎯 先行指標・SCリスク (Leading Indicators & SC Risk) — v2.1 新規追加
+### 5. 🎯 先行指標・SCリスク (Leading Indicators & SC Risk)
 需要予測モデルの外生変数として最も効く「先行指標」と、サプライチェーン断絶リスクを構造化データで捕捉します。
 
 *   **PMI / ISM / OECD CLI (`pmi_fetcher.py`)**
     *   **取得データ**: FRED経由で製造業新規受注、OECD景気先行指数 (米/日/中/EU)、経済政策不確実性指数。
-    *   **特徴**: 需要予測モデルの標準外生変数。製造業PMIの代替・補完として機能。
+    *   **特徴**: 需要予測モデルの標準外生変数。製造業PMIの代替・補完として機能。`hub.get_pmi()`。
 *   **UN Comtrade (`comtrade_fetcher.py`)**
     *   **取得データ**: HSコード粒度のグローバル貿易フロー。輸入・輸出、相手国別内訳。
-    *   **特徴**: サプライ上流の変動を捕捉。e-Stat貿易統計を国際的に補完。報告国 (`reporter`) は1か国を指定する（`ALL` = World は相手国 `partner` にだけ使え、報告国に指定すると ValueError）。台湾 (`TW`) は報告国に無く、相手国としては 490 "Other Asia, nes" に計上される。
+    *   **特徴**: サプライ上流の変動を捕捉。e-Stat貿易統計を国際的に補完。報告国 (`reporter`) は1か国を指定する（`ALL` = World は相手国 `partner` にだけ使え、報告国に指定すると ValueError）。台湾 (`TW`) は報告国に無く、相手国としては 490 "Other Asia, nes" に計上される。`hub.get_comtrade()`。
 *   **EIA (`eia_fetcher.py`)**
     *   **取得データ**: 米エネルギー情報局の週次原油在庫、天然ガス在庫、精製所稼働率、電力需給。
-    *   **特徴**: 「価格」ではなく「需給ファンダ」を先読み。Yahoo先物より先行性高。
+    *   **特徴**: 「価格」ではなく「需給ファンダ」を先読み。Yahoo先物より先行性高。`hub.get_energy_eia()`。
 *   **GDELT (`gdelt_fetcher.py`)**
     *   **取得データ**: グローバルニュースから抽出された地政学イベント・SC断絶事象の時系列・記事一覧・感情分析。
-    *   **特徴**: APIキー不要。スエズ・紅海・台湾海峡などの断絶リスクを定量化。SCM_RISK_THEMESエイリアス付き。
+    *   **特徴**: APIキー不要。スエズ・紅海・台湾海峡などの断絶リスクを定量化。SCM_RISK_THEMESエイリアス付き。`hub.get_gdelt()`。
 *   **AIS / 港湾混雑 (`ais_fetcher.py`)**
     *   **取得データ**: 主要15港湾 (上海・シンガポール・LA・ロッテルダム・スエズ等) の船舶AIS位置・混雑度。
-    *   **特徴**: BDIなどの海運指数は結果指標、AISは**先行指標**。Datalastic/AISHub対応。
-*   **日銀 短観 TANKAN (`boj_fetcher.py`)**
-    *   **取得データ**: 業況判断DI (大企業/中堅/中小・製造業/全産業、最近・先行き)。日銀時系列統計API経由。
-    *   **特徴**: APIキー不要。B2B需要・設備投資の先行シグナル。四半期。`get_boj_tankan()`。
+    *   **特徴**: BDIなどの海運指数は結果指標、AISは**先行指標**。Datalastic/AISHub対応。`hub.get_port_congestion()`。
+*   **日銀 時系列統計 TANKAN / CGPI / SPPI (`boj_fetcher.py`)** — v2.4 拡充
+    *   **取得データ**: 短観業況判断DI (大企業/中堅/中小・製造業/非製造業/全産業、最近・先行き)、企業物価指数 (CGPI 国内/輸出/輸入)、企業向けサービス価格指数 (SPPI)、マネーストックM2。
+    *   **特徴**: APIキー不要。B2B需要・設備投資の先行シグナルおよび原価・インフレ転嫁圧力の把握。`hub.get_boj_tankan()`, `hub.get_cgpi()`, `hub.get_boj()`。
 *   **内閣府 景気動向指数 CI/DI (e-Stat `0003446461`)**
     *   **取得データ**: 景気動向指数の先行指数/一致指数/遅行指数 (CI/DI)。月次。
-    *   **特徴**: 需要予測の標準的な先行指標。`get_keiki_di()` (e-Stat経由・要ESTAT_API_KEY)。
+    *   **特徴**: 需要予測の標準的な先行指標。`hub.get_keiki_di()` (e-Stat経由・要ESTAT_API_KEY)。
 *   **JNTO 訪日外客数 (e-Stat `0003449064`)**
     *   **取得データ**: 港別 入国外国人の国籍・地域別人数。月次。
-    *   **特徴**: インバウンド需要のドライバー。`get_inbound_visitors()` (港×国籍粒度→港次元で集計)。
+    *   **特徴**: インバウンド需要のドライバー。`hub.get_inbound_visitors()` (港×国籍粒度→港次元で集計)。
 
-### 6. 🌾 業界特化データ (Industry-Specific) — v2.1 新規追加
+### 6. 🌾 業界特化データ (Industry-Specific)
 
 *   **USDA / FAOSTAT (`usda_fetcher.py`)**
     *   **取得データ**: USDA NASS米国農業統計、FAOSTATグローバル作況・在庫・食料需給バランス。
-    *   **特徴**: `maff_fetcher` の海外版。食品業界の上流シグナル。
+    *   **特徴**: 食品・飲料業界の上流原材料シグナル。`hub.get_agri()`。
 *   **半導体業界 (`semicon_fetcher.py`)**
     *   **取得データ**: 米国「コンピュータ・電子製品」製造業（FRED A34S* 系列）の出荷・新規受注・在庫。半導体単独の系列ではない。Book-to-Bill比（受注/出荷）の自動計算。
-    *   **特徴**: WSTS/SEMIは会員制のためFRED公開データ経由。電気機器・精密機器の景気判断。
+    *   **特徴**: WSTS/SEMIは会員制のためFRED公開データ経由。電気機器・精密機器の景気判断。`hub.get_semicon()`。
 *   **ENTSO-E (`entsoe_fetcher.py`)**
     *   **取得データ**: 欧州15カ国の電力需給実績・予測、Day-ahead価格、風力・太陽光発電。
-    *   **特徴**: TEPCOの欧州版。エネルギーコスト・排出権価格に連動。
+    *   **特徴**: TEPCOの欧州版。A75発電実績での揚水消費除外、CurveType A03（可変ブロック）の前方補完に対応。`hub.get_eu_power()`。
 
-### 7. 🌍 グローバルリスク・補完 (Global Risk & Complement) — v2.1 新規追加
+### 7. 🌍 グローバルリスク・補完 (Global Risk & Complement)
 
 *   **USGS Earthquake (`usgs_fetcher.py`)**
     *   **取得データ**: グローバル地震リアルタイム（マグニチュード、位置、深さ、津波フラグ）。
-    *   **特徴**: J-SHISは日本特化、こちらは海外工場・サプライヤ拠点評価用。APIキー不要。
+    *   **特徴**: J-SHISは日本特化、こちらは海外工場・サプライヤ拠点評価用。APIキー不要。`hub.get_earthquakes()`。
 *   **NASA FIRMS (`firms_fetcher.py`)**
     *   **取得データ**: 衛星観測による山火事ホットスポット (MODIS/VIIRS)。
-    *   **特徴**: 米西海岸・豪州・地中海・シベリアなど主要リスクエリアのプリセット付き。
+    *   **特徴**: 米西海岸・豪州・地中海・シベリアなど主要リスクエリアのプリセット付き。`hub.get_wildfires()`。
 *   **ECB / BOJ 公的為替 (`official_fx_fetcher.py`)**
     *   **取得データ**: ECB Eurosystem公式日次レート、BOJ/フランクフルター経由の円建公式レート。
-    *   **特徴**: Yahooは市場値、こちらは**会計・決算・税務・契約用の公的レート**。
+    *   **特徴**: Yahooは市場値、こちらは**会計・決算・税務・契約用の公的レート**。`hub.get_official_fx()`。
 
 ### 8. 🛠️ ユーティリティ (Utilities)
 データ統合前の名寄せや、機械学習モデル向けの特徴量生成を行います。
 
-*   **ZipCloud (`zipcode_fetcher.py`)**: 郵便番号から住所への変換。
-*   **GSI Maps (`gsi_fetcher.py`)**: 国土地理院APIを用いたジオコーディング（住所・地名から緯度経度への変換）。
-*   **National Tax (`corp_fetcher.py`)**: 国税庁APIを用いた法人番号・企業情報の検索。
+*   **ZipCloud (`zipcode_fetcher.py`)**: 郵便番号から住所への変換 (`hub.get_zipcode()`)。
+*   **GSI Maps (`gsi_fetcher.py`)**: 国土地理院APIを用いたジオコーディング (`hub.get_gsi()`)。
+*   **National Tax (`corp_fetcher.py`)**: 国税庁APIを用いた法人番号・企業情報の検索 (`hub.get_corp()`)。
+*   **CKAN / e-Gov (`ckan_fetcher.py`)**: 政府オープンデータカタログの検索 (`hub.get_ckan()`)。
 *   **ML Features (`feature_engineer.py`)**: 取得した時系列データに対し、ラグ変数 (Lag)、移動平均 (Rolling Mean)、カレンダーフラグ（曜日、月末など）を自動生成。
-*   **Time Alignment (`time_align.py`)**: 異なる周波数（日次/週次/月次）の外生変数を共通周波数にリサンプリングして横結合 (`align_frequency` / `align_many`)。予測モデルへの covariate 投入前に周波数を揃える。
+*   **Time Alignment (`time_align.py`)**: 異なる周波数（日次/週次/月次/四半期/年次）の外生変数を共通周波数にリサンプリングして横結合 (`align_frequency` / `align_many`)。予測モデルへの covariate 投入前に周波数を揃える。
 *   **Parallel Fan-out (`OpenDataHub.get_many`)**: 複数ソースを並列取得 (I/Oバウンドをスレッドで並列化)。1ソースの失敗は隔離（そのラベルは空DF、例外は `hub.last_errors` に残る）。

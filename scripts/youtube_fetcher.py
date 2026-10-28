@@ -2,10 +2,9 @@ import argparse
 from typing import Any
 
 import polars as pl
+from api_utils import cli_entry, require_api_key, save_output
 from dotenv import load_dotenv
 from googleapiclient.discovery import build
-
-from api_utils import cli_entry, require_api_key, save_output
 
 # Load environment variables
 load_dotenv()

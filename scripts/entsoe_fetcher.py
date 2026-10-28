@@ -5,8 +5,6 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import requests
-from dotenv import load_dotenv
-
 from api_utils import (
     cli_entry,
     default_date_range,
@@ -15,6 +13,7 @@ from api_utils import (
     save_output,
 )
 from api_utils import get_with_retry_redacted as _get_redacted
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -76,7 +75,7 @@ def fetch_entsoe_data(
     output_file: str | None = None,
 ) -> pl.DataFrame:
     """
-    ENTSO-E Transparency Platform から欧州電力需給データを取得するわ。
+    ENTSO-E Transparency Platform から欧州電力需給データを取得する。
     - data_type: 'load_actual', 'load_forecast', 'generation', 'day_ahead_price', 'wind_solar'
     - country: 'DE', 'FR', 'IT', 'ES', ...
     無料だが登録制。APIキー取得: https://transparency.entsoe.eu/content/static_content/Static%20content/web%20api/Guide.html
@@ -119,7 +118,7 @@ def fetch_entsoe_data(
     if process_type:
         params["processType"] = process_type
 
-    print(f"Fetching ENTSO-E: {data_type} for {country} ({start_date}→{end_date})...")
+    print(f"Fetching ENTSO-E: {data_type} for {country} ({start_date}->{end_date})...")
     try:
         response = _get_redacted(BASE_URL, [api_key], params=params)
     except requests.exceptions.HTTPError as e:
@@ -149,30 +148,76 @@ def fetch_entsoe_data(
 
     records = []
     for ts in _findall(root, ".//{ns}TimeSeries"):
+        # A75 (generation) では inBiddingZone_Domain が発電、outBiddingZone_Domain のみは揚水消費等を表すため除外
+        if doc_type == "A75":
+            in_bz = _find(ts, "{ns}inBiddingZone_Domain.mRID")
+            out_bz = _find(ts, "{ns}outBiddingZone_Domain.mRID")
+            if out_bz is not None and in_bz is None:
+                continue
+
         psr = _find(ts, "{ns}MktPSRType/{ns}psrType")
         psr_type = psr.text if psr is not None else None
+        curve_elem = _find(ts, "{ns}curveType")
+        curve_type = curve_elem.text.strip() if curve_elem is not None and curve_elem.text else None
+
         for period in _findall(ts, "{ns}Period"):
             start_elem = _find(period, "{ns}timeInterval/{ns}start")
+            end_elem = _find(period, "{ns}timeInterval/{ns}end")
             resolution = _find(period, "{ns}resolution")
             base_start = start_elem.text if start_elem is not None else None
+            base_end = end_elem.text if end_elem is not None else None
             res_text = resolution.text if resolution is not None else "PT60M"
             step = _parse_resolution(res_text)
             start_dt = datetime.strptime(base_start, "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC) if base_start else None
+            end_dt = datetime.strptime(base_end, "%Y-%m-%dT%H:%MZ").replace(tzinfo=UTC) if base_end else None
 
+            raw_points: list[tuple[int, float]] = []
             for pt in _findall(period, "{ns}Point"):
                 pos = _find(pt, "{ns}position")
                 qty = _find(pt, "{ns}quantity")
                 price = _find(pt, "{ns}price.amount")
                 value = qty.text if qty is not None else (price.text if price is not None else None)
                 position = int(pos.text) if pos is not None else None
-                records.append({
-                    "date": start_dt + (position - 1) * step if start_dt and position else None,
-                    "period_start": base_start,
-                    "position": position,
-                    "resolution": res_text,
-                    "psr_type": psr_type,
-                    "value": float(value) if value else None,
-                })
+                if position is not None and value is not None:
+                    raw_points.append((position, float(value)))
+                else:
+                    records.append({
+                        "date": start_dt + (position - 1) * step if start_dt and position else None,
+                        "period_start": base_start,
+                        "position": position,
+                        "resolution": res_text,
+                        "psr_type": psr_type,
+                        "value": float(value) if value else None,
+                    })
+
+            if curve_type == "A03" and raw_points:
+                raw_points.sort(key=lambda x: x[0])
+                total_positions = int((end_dt - start_dt) // step) if (start_dt and end_dt) else raw_points[-1][0]
+                total_positions = max(total_positions, raw_points[-1][0])
+                point_map = dict(raw_points)
+                last_val: float | None = None
+                for p_idx in range(1, total_positions + 1):
+                    if p_idx in point_map:
+                        last_val = point_map[p_idx]
+                    if last_val is not None:
+                        records.append({
+                            "date": start_dt + (p_idx - 1) * step if start_dt else None,
+                            "period_start": base_start,
+                            "position": p_idx,
+                            "resolution": res_text,
+                            "psr_type": psr_type,
+                            "value": last_val,
+                        })
+            else:
+                for position, val in raw_points:
+                    records.append({
+                        "date": start_dt + (position - 1) * step if start_dt and position else None,
+                        "period_start": base_start,
+                        "position": position,
+                        "resolution": res_text,
+                        "psr_type": psr_type,
+                        "value": val,
+                    })
 
     if not records:
         print("No ENTSO-E data found or empty response.")

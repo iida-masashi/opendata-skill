@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-from meteo_fetcher import fetch_open_meteo
+from meteo_fetcher import fetch_open_meteo, fetch_open_meteo_ensemble
 
 MOCK_HOURLY_RESPONSE = {
     "latitude": 35.69,
@@ -197,3 +197,46 @@ def test_hub_get_weather_daily(mock_get: MagicMock, make_response, hub) -> None:
 
     assert "temperature_2m_max" in df.columns
     assert df["date"].to_list() == ["2024-01-01", "2024-01-02"]
+
+
+MOCK_ENSEMBLE_RESPONSE = {
+    "latitude": 35.69,
+    "longitude": 139.69,
+    "daily": {
+        "time": ["2025-07-01", "2025-07-02"],
+        "temperature_2m_max_member01": [30.0, 32.0],
+        "temperature_2m_max_member02": [32.0, 34.0],
+        "temperature_2m_max_member03": [34.0, 36.0],
+        "precipitation_sum_member01": [0.0, 5.0],
+        "precipitation_sum_member02": [2.0, 10.0],
+        "precipitation_sum_member03": [4.0, 15.0],
+    },
+}
+
+
+@patch("meteo_fetcher.requests.get")
+def test_fetch_open_meteo_ensemble_computes_percentiles(
+    mock_get: MagicMock, make_response, tmp_path: Path
+) -> None:
+    """アンサンブル予報メンバーから mean, std, p10, p50, p90, min, max と date/value を算出する。"""
+    mock_get.return_value = make_response(json=MOCK_ENSEMBLE_RESPONSE)
+    out = str(tmp_path / "ensemble.csv")
+    df = fetch_open_meteo_ensemble(
+        35.69,
+        139.69,
+        variables=["temperature_2m_max", "precipitation_sum"],
+        model="icon_seamless",
+        daily=True,
+        output_file=out,
+    )
+    assert df.height == 2
+    assert Path(out).exists()
+    assert df.get_column("date").to_list() == ["2025-07-01", "2025-07-02"]
+    assert df.get_column("temperature_2m_max_mean").to_list() == [32.0, 34.0]
+    assert df.get_column("temperature_2m_max_p50").to_list() == [32.0, 34.0]
+    assert df.get_column("temperature_2m_max_min").to_list() == [30.0, 32.0]
+    assert df.get_column("temperature_2m_max_max").to_list() == [34.0, 36.0]
+    assert df.get_column("value").to_list() == [32.0, 34.0]
+    called_url = mock_get.call_args[0][0]
+    assert "ensemble-api.open-meteo.com" in called_url
+

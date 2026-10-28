@@ -2,10 +2,9 @@ import argparse
 
 import polars as pl
 import requests  # noqa: F401 - テストが mlit_fetcher.requests.get を patch する
-from dotenv import load_dotenv
-
 from api_utils import cli_entry, require_api_key, save_output
 from api_utils import get_with_retry as _get_with_retry
+from dotenv import load_dotenv
 
 load_dotenv()
 

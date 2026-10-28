@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-
 from odpt_fetcher import fetch_odpt_data
 
 

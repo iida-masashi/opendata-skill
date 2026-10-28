@@ -5,8 +5,6 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 import requests
-
-
 from entsoe_fetcher import AREA_EIC, DOC_TYPES, fetch_entsoe_data
 
 
@@ -258,3 +256,58 @@ def test_mock_empty_xml(mock_get: MagicMock, monkeypatch: pytest.MonkeyPatch) ->
 
     df = fetch_entsoe_data(data_type="load_actual", country="DE")
     assert df.is_empty()
+
+
+ENTSOE_A75_CONSUMPTION_AND_A03_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<GL_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-6:generationloaddocument:3:0">
+  <TimeSeries>
+    <mRID>1</mRID>
+    <inBiddingZone_Domain.mRID codingScheme="A01">10Y1001A1001A83F</inBiddingZone_Domain.mRID>
+    <MktPSRType>
+      <psrType>B10</psrType>
+    </MktPSRType>
+    <curveType>A03</curveType>
+    <Period>
+      <timeInterval>
+        <start>2024-01-01T00:00Z</start>
+        <end>2024-01-01T01:00Z</end>
+      </timeInterval>
+      <resolution>PT15M</resolution>
+      <Point><position>1</position><quantity>100</quantity></Point>
+      <Point><position>4</position><quantity>120</quantity></Point>
+    </Period>
+  </TimeSeries>
+  <TimeSeries>
+    <mRID>2</mRID>
+    <outBiddingZone_Domain.mRID codingScheme="A01">10Y1001A1001A83F</outBiddingZone_Domain.mRID>
+    <MktPSRType>
+      <psrType>B10</psrType>
+    </MktPSRType>
+    <curveType>A01</curveType>
+    <Period>
+      <timeInterval>
+        <start>2024-01-01T00:00Z</start>
+        <end>2024-01-01T00:30Z</end>
+      </timeInterval>
+      <resolution>PT15M</resolution>
+      <Point><position>1</position><quantity>999</quantity></Point>
+      <Point><position>2</position><quantity>999</quantity></Point>
+    </Period>
+  </TimeSeries>
+</GL_MarketDocument>
+"""
+
+
+@patch("entsoe_fetcher.requests.get")
+def test_a75_excludes_consumption_and_forward_fills_a03(
+    mock_get: MagicMock, make_response, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A75 では outBiddingZone_Domain のみの揚水消費系列を除外し、curveType=A03 の欠落 position を前方補完する。"""
+    monkeypatch.setenv("ENTSOE_API_KEY", "test_key_mock")
+    mock_get.return_value = make_response(text=ENTSOE_A75_CONSUMPTION_AND_A03_XML)
+    df = fetch_entsoe_data(data_type="generation", country="DE", start_date="2024-01-01", end_date="2024-01-01")
+    # 消費系列 (999) が除外され、A03 の4コマ (pos 1..4) が [100, 100, 100, 120] に補完される
+    assert df.height == 4
+    assert df.get_column("position").to_list() == [1, 2, 3, 4]
+    assert df.get_column("value").to_list() == [100.0, 100.0, 100.0, 120.0]
+

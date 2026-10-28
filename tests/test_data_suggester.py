@@ -3,9 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import data_suggester
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "data_suggester.py"
 

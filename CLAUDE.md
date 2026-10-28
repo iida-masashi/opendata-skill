@@ -4,7 +4,9 @@
 
 ## これは何か
 
-`opendata-skill` は、約43のオープンデータ・外部API（e-Stat、日銀短観、不動産情報ライブラリ、PLATEAU、FRED、World Bank、OECD、UN Comtrade、EIA、ENTSO-E、NASA FIRMS、GDELT、AIS港湾混雑、Open-Meteo、Google Trends、Yahoo Finance 等）を単一インターフェース `OpenDataHub`（`scripts/opendata_hub.py`）に統合するデータ取得ツールキットです（単独利用・AIエージェント向けスキルの両方として利用可能）。`darts-forecast-skill` のような需要予測・分析ツールに外生変数（マクロ経済・天候・トレンド・地政学リスク）を供給するために存在します。
+`opendata-skill` は、37種類のフェッチャー（45以上のデータソース・プリセット：e-Stat、日銀短観・企業物価指数CGPI、不動産情報ライブラリ、PLATEAU、FRED、World Bank、OECD、UN Comtrade、EIA、ENTSO-E、NASA FIRMS、GDELT、AIS港湾混雑、Open-Meteo確定値＆アンサンブル確率予報、Wikimedia Pageviews、Google Trends、Yahoo Finance 等）を単一インターフェース `OpenDataHub`（`scripts/opendata_hub.py`）に統合するデータ取得・特徴量パイプライン・ツールキットです（単独利用・AIエージェント向けスキルの両方として利用可能）。`darts-forecast-skill` のような需要予測・S&OP・分析ツールに外生変数（マクロ経済・天候確率分布・検索トレンド・地政学リスク）を供給するために存在します。
+
+課題・バグ・機能改善はすべて GitHub Issues（`https://github.com/iida-masashi/opendata-skill/issues`）で管理しています。
 
 Progressive disclosure（段階的開示）: `SKILL.md` がAIエージェント向けのエントリポイントで、詳細情報は明示的に `references/capabilities.md`（取得可能データの全カタログ）、`references/usage_guide.md`（CLI/API使用法）、`docs/REQUIREMENTS.md`、`docs/DATA_SOURCE_TERMS.md` に委譲しています。データソースを追加する場合や「何が取得できるか」に答える場合は、フェッチャー名から推測せずこれらのファイルを読んでください。
 
@@ -46,7 +48,7 @@ uv run python scripts/meteo_fetcher.py --lat 35.6895 --lon 139.6917 --historical
 
 ### Fail Loud, Not Silent（握り潰さない設計）
 
-これは意図的で、設計上の中核原則です（`SKILL.md`、`BACKLOG.md` の v2.2 バグ監査ノート参照）— 取得失敗を「データ無し」と区別不能にしてはいけません。サイレントに空になった外生変数は下流の予測を汚染するためです:
+これは意図的で、設計上の中核原則です（`SKILL.md` および GitHub Issues の設計ノート参照）— 取得失敗を「データ無し」と区別不能にしてはいけません。サイレントに空になった外生変数は下流の予測を汚染するためです:
 
 - `api_utils.retry_with_ratelimit` は一時的エラー（ネットワークエラーおよびHTTP 429/5xx、`_is_transient` で判定）**のみ**を `tenacity` でリトライします。プログラムエラー（`KeyError`、`ValueError`、429以外の4xx）は即座に失敗し、無駄な5回リトライと指数バックオフを避けます。
 - フェッチャーは取得失敗・HTTP エラー・200 で返るエラーペイロードを例外として送出します。空DataFrameを返してよいのは、API が正常応答で0件を返したと確定した場合だけです。

@@ -1,8 +1,8 @@
 import argparse
+import re
 
 import polars as pl
 import wbgapi as wb
-
 from api_utils import cli_entry, save_output
 
 # Common Indicator Aliases for Easy Access
@@ -15,8 +15,35 @@ INDICATORS = {
     "unemployment": "SL.UEM.TOTL.ZS", # Unemployment, total (% of total labor force)
     "co2": "EN.ATM.CO2E.PC",       # CO2 emissions (metric tons per capita)
     "poverty": "SI.POV.DDAY",      # Poverty headcount ratio at $2.15 a day
-    "life_expectancy": "SP.DYN.LE00.IN" # Life expectancy at birth, total
+    "life_expectancy": "SP.DYN.LE00.IN", # Life expectancy at birth, total
+    "exports": "NE.EXP.GNFS.CD",   # Exports of goods and services (current US$)
+    "imports": "NE.IMP.GNFS.CD",   # Imports of goods and services (current US$)
+    "manufacturing": "NV.IND.MANF.CD", # Manufacturing, value added (current US$)
 }
+
+
+def to_long_format(df: pl.DataFrame) -> pl.DataFrame:
+    """World Bank のワイド形式 (YR2020, YR2021, ...) を縦持ち (date, value) へ変換する。"""
+    if df.is_empty():
+        return df
+    yr_cols = [c for c in df.columns if re.fullmatch(r"YR\d{4}", c)]
+    if not yr_cols:
+        return df
+    index_cols = [c for c in df.columns if c not in yr_cols]
+    return (
+        df.unpivot(
+            on=yr_cols,
+            index=index_cols,
+            variable_name="date",
+            value_name="value",
+        )
+        .with_columns(
+            pl.col("date").str.strip_prefix("YR"),
+            pl.col("value").cast(pl.Float64, strict=False),
+        )
+        .sort([*index_cols, "date"])
+    )
+
 
 def fetch_worldbank_data(
     indicators: str | list[str],
@@ -24,11 +51,13 @@ def fetch_worldbank_data(
     start_year: str | int | None = None,
     end_year: str | int | None = None,
     output_file: str | None = None,
+    long_format: bool = False,
 ) -> pl.DataFrame:
     """
     Fetches data from World Bank API using wbgapi.
     Covers General Stats (GDP, Pop) and SDGs.
-    戻り値は国 × 年 (YR2020, YR2021, ...) のワイド形式。output_file を指定すると CSV にも保存する。
+    既定 (long_format=False) の戻り値は国 × 年 (YR2020, YR2021, ...) のワイド形式。
+    long_format=True または OpenDataHub 経由では date / value の縦持ち形式に変換される。
     """
 
     # Process indicators
@@ -68,7 +97,7 @@ def fetch_worldbank_data(
     pdf = wb.data.DataFrame(indicators, economy=countries, time=time_range, labels=True)  # noqa: E501
 
     # Reset index to make Economy (Country Code) a column
-    pdf.reset_index(inplace=True)
+    pdf = pdf.reset_index()
 
     if pdf.empty:
         print("No data found.")
@@ -76,6 +105,8 @@ def fetch_worldbank_data(
 
     # pyarrow 非依存で変換する（pl.from_pandas は文字列列に pyarrow を要する）。NaN は null にそろえる。
     df = pl.DataFrame(pdf.to_dict(orient="list")).fill_nan(None)
+    if long_format:
+        df = to_long_format(df)
 
     save_output(df, output_file)
     return df
@@ -107,6 +138,7 @@ def main() -> None:
     parser.add_argument("--countries", default="all", help="Country Codes (ISO3, comma-separated). Default: 'all'. e.g., 'JPN,USA,CHN,WLD'")  # noqa: E501
     parser.add_argument("--start", type=int, help="Start Year (YYYY)")
     parser.add_argument("--end", type=int, help="End Year (YYYY)")
+    parser.add_argument("--long", action="store_true", help="Output in long format (date, value)")
     parser.add_argument("--search", help="Search term for indicators. If set, only searches and exits.")  # noqa: E501
     parser.add_argument("--list", action="store_true", help="List available metric aliases")  # noqa: E501
     parser.add_argument("--out", help="Output CSV filename")
@@ -118,8 +150,14 @@ def main() -> None:
     elif args.search:
         search_indicators(args.search)
     elif args.indicators:
-        fetch_worldbank_data(args.indicators, args.countries, args.start, args.end,
-                             args.out or _default_output_file(args.indicators))
+        fetch_worldbank_data(
+            args.indicators,
+            args.countries,
+            args.start,
+            args.end,
+            args.out or _default_output_file(args.indicators),
+            long_format=args.long,
+        )
     else:
         parser.error("One of --indicators, --search, or --list is required.")
 

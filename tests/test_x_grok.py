@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-
 import x_grok_fetcher
 from x_grok_fetcher import fetch_x_grok
 

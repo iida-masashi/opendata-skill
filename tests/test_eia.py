@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-
-
 from eia_fetcher import SERIES_ALIAS, fetch_eia_data
 
 

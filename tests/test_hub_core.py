@@ -5,11 +5,11 @@ import time
 import urllib.error
 from pathlib import Path
 
+import api_utils
 import polars as pl
 import pytest
-
-import api_utils
 from api_utils import MissingApiKeyError, _is_transient, rate_limited, require_api_key
+
 from scripts.cache_manager import CacheManager
 from scripts.opendata_hub import OpenDataHub
 

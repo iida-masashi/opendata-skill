@@ -4,8 +4,6 @@ import sys
 
 import polars as pl
 import requests  # noqa: F401 - テストが <module>.requests.get を patch する
-from dotenv import load_dotenv
-
 from api_utils import (
     MissingApiKeyError,
     cli_entry,
@@ -14,6 +12,7 @@ from api_utils import (
     save_output,
 )
 from api_utils import get_with_retry_redacted as _get_redacted
+from dotenv import load_dotenv
 
 load_dotenv()
 

@@ -2,7 +2,6 @@ import argparse
 
 import polars as pl
 import requests  # noqa: F401 - テストが gdelt_fetcher.requests.get を patch する
-
 from api_utils import cli_entry, default_date_range, save_output
 from api_utils import get_with_retry as _get_with_retry
 

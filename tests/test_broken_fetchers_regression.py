@@ -6,10 +6,9 @@ Style follows test_zipcode.py: mock requests.get.
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import ais_fetcher
 import comtrade_fetcher
+import pytest
 from corp_fetcher import fetch_corporate_info
 from eia_fetcher import fetch_eia_data
 from estat_fetcher import fetch_estat_data

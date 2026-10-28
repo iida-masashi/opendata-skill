@@ -7,7 +7,6 @@ import polars as pl
 import pytest
 from dotenv import load_dotenv
 
-
 # .env を opendata-skill ルートから読み込む
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -104,3 +103,13 @@ def test_pmi_alias_resolves_to_fred_id(
     df = fetch_pmi_data(series="oecd_cli_jp")
     assert mock_get.call_args.kwargs["params"]["series_id"] == PMI_SERIES["oecd_cli_jp"]
     assert df["series"].to_list() == ["oecd_cli_jp"]
+
+
+@pytest.mark.parametrize("removed", ["ism_mfg_pmi", "ism_services", "NAPM", "NMFCI"])
+@patch("fred_fetcher.requests.get")
+def test_removed_ism_series_raises_value_error(mock_get: MagicMock, removed: str) -> None:
+    """FRED から削除済みの旧 ISM 系列は通信前に明示的な ValueError を送出する。"""
+    assert removed not in PMI_SERIES
+    with pytest.raises(ValueError, match="2016-06-24"):
+        fetch_pmi_data(series=removed)
+    mock_get.assert_not_called()

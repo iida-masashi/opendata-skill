@@ -57,8 +57,7 @@ def _mock_wb_dataframe() -> pd.DataFrame:
             "YR2023": [4.21e12, 2.7e13],
         }
     )
-    df.set_index("Economy", inplace=True)
-    return df
+    return df.set_index("Economy")
 
 
 @patch("worldbank_fetcher.wb.data.DataFrame")
@@ -163,3 +162,19 @@ def test_fetch_with_year_range(mock_wb: MagicMock, tmp_path: Path) -> None:
     call_kwargs = mock_wb.call_args[1]
     assert "time" in call_kwargs
     assert list(call_kwargs["time"]) == [2020, 2021, 2022]
+
+
+@patch("worldbank_fetcher.wb.data.DataFrame")
+def test_worldbank_normalizes_to_long_for_hub_and_time_align(mock_wb: MagicMock) -> None:
+    """WorldBank の横持ち YR2022/YR2023 が Hub._normalize_df で縦持ち (date, value) になり time_align に繋がる。"""
+    from time_align import align_frequency
+
+    from scripts.opendata_hub import OpenDataHub
+
+    mock_wb.return_value = _mock_wb_dataframe()
+    wide = fetch_worldbank_data("gdp", countries="JPN,USA")
+    norm = OpenDataHub._normalize_df(wide)
+    assert set(norm.columns) >= {"Economy", "Country", "date", "value"}
+    aligned = align_frequency(norm, freq="1y", filter_col="Economy", filter_val="JPN")
+    assert aligned.height == 2
+

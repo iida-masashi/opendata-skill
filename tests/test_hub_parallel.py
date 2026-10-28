@@ -4,7 +4,6 @@ import time
 
 import polars as pl
 
-
 from scripts.opendata_hub import OpenDataHub
 
 

@@ -1,7 +1,7 @@
-"""日本銀行 時系列統計データ検索 API フェッチャー (短観 TANKAN 等)。
+"""日本銀行 時系列統計データ検索 API フェッチャー (短観 TANKAN・企業物価指数 CGPI・SPPI 等)。
 
 BOJ Time-Series Data Search の公開REST API (APIキー不要)。
-短観の業況判断DIなど、SCM需要予測の先行指標として有用な企業景況感を取得する。
+短観の業況判断DIや企業物価指数(CGPI)など、SCM需要予測・原価予測の先行指標を取得する。
 
 エンドポイント: https://www.stat-search.boj.or.jp/api/v1/getDataCode
 レスポンスCSVは STATUS/NEXTPOSITION 等のメタ前文の後に SERIES_CODE 始まりの
@@ -19,21 +19,38 @@ from typing import Any
 
 import polars as pl
 import requests
-
 from api_utils import cli_entry, format_http_error, save_output
 from api_utils import get_with_retry as _get_with_retry
 
 API_URL = "https://www.stat-search.boj.or.jp/api/v1/getDataCode"
 
-# よく使う短観シリーズのエイリアス → BOJ系列コード (API用の bare TK 形式)。
-# DI: 業況判断 (「良い」-「悪い」)。最近=…01000 / 先行き=…11000。
-# 期 (SURVEY_DATES YYYYQQ) は暦ベース: 01=3月調査, 02=6月, 03=9月, 04=12月。
-SERIES_ALIAS = {
+# よく使う短観・物価・マネーストックシリーズのエイリアス → BOJ系列コード
+SERIES_ALIAS: dict[str, str] = {
+    # 短観 (db=CO): DI 業況判断 (「良い」-「悪い」)。最近=…01000 / 先行き=…11000。
     "tankan_large_mfg": "TK99F1000601GCQ01000",        # 大企業・製造業 業況判断DI(最近)
     "tankan_large_mfg_fc": "TK99F1000601GCQ11000",     # 大企業・製造業 業況判断DI(先行き)
+    "tankan_large_nonmfg": "TK99F2000601GCQ01000",     # 大企業・非製造業 業況判断DI(最近)
+    "tankan_large_nonmfg_fc": "TK99F2000601GCQ11000",  # 大企業・非製造業 業況判断DI(先行き)
     "tankan_large_all": "TK99F0000601GCQ01000",        # 大企業・全産業 業況判断DI(最近)
     "tankan_mid_mfg": "TK99F1000601GCQ02000",          # 中堅・製造業 業況判断DI(最近)
     "tankan_small_mfg": "TK99F1000601GCQ03000",        # 中小・製造業 業況判断DI(最近)
+    # 企業物価指数 CGPI (2020年基準, db=PR01): 原材料・仕入コスト・価格転嫁分析用
+    "cgpi_all": "PRCG20_2200000000",                   # 国内企業物価指数 総平均
+    "cgpi_export": "PRCG20_2400000000",                # 輸出物価指数 総平均(円ベース)
+    "cgpi_import": "PRCG20_2600000000",                # 輸入物価指数 総平均(円ベース)
+    # 企業向けサービス価格指数 SPPI (2020年基準, db=PR02): 物流・サービス原価分析用
+    "sppi_all": "PRCS20_5200000000",                   # 企業向けサービス価格指数 総平均
+    # マネーストック (db=MD02)
+    "money_stock_m2": "MAM1NAM2M2MO",                  # マネーストック M2 平残
+}
+
+# エイリアスごとのデフォルトDBコード（未登録は "CO"）
+SERIES_DB_MAP: dict[str, str] = {
+    "cgpi_all": "PR01",
+    "cgpi_export": "PR01",
+    "cgpi_import": "PR01",
+    "sppi_all": "PR02",
+    "money_stock_m2": "MD02",
 }
 
 # NEXTPOSITION を辿る回数の上限（応答異常で無限ループしないための安全弁）
@@ -87,25 +104,27 @@ def fetch_boj_data(
     series: str = "tankan_large_mfg",
     start_date: str | None = None,
     end_date: str | None = None,
-    db: str = "CO",
+    db: str | None = None,
     lang: str = "en",
     output_file: str | None = None,
 ) -> pl.DataFrame:
     """BOJ 時系列APIから系列データを取得する。
 
-    - series: SERIES_ALIAS のキー、または BOJ系列コード (TK… 形式) を直接指定。
+    - series: SERIES_ALIAS のキー、または BOJ系列コード (TK… / PR… 形式) を直接指定。
     - start_date/end_date: YYYYMM 形式 (任意)。
+    - db: BOJ データベース名 (省略時はエイリアスに応じて自動選択、既定は 'CO')。
     戻り値は date(=SURVEY_DATES) / value(=VALUES) を含む正規化済み DataFrame。
     """
     code = SERIES_ALIAS.get(series, series)
+    resolved_db = db if db is not None else SERIES_DB_MAP.get(series, "CO")
 
-    params: dict[str, Any] = {"format": "csv", "lang": lang, "db": db, "code": code}
+    params: dict[str, Any] = {"format": "csv", "lang": lang, "db": resolved_db, "code": code}
     if start_date:
         params["startDate"] = start_date
     if end_date:
         params["endDate"] = end_date
 
-    print(f"Fetching BOJ series {code} (db={db})...")
+    print(f"Fetching BOJ series {code} (db={resolved_db})...")
     pages: list[pl.DataFrame] = []
     for _ in range(_MAX_PAGES):
         page, next_pos = _parse_page(_request_page(params))
@@ -140,17 +159,18 @@ def fetch_boj_data(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch BOJ Time-Series data (TANKAN etc.).")
+    parser = argparse.ArgumentParser(description="Fetch BOJ Time-Series data (TANKAN, CGPI, SPPI, etc.).")
     parser.add_argument(
         "--series", default="tankan_large_mfg",
-        help=f"Alias {list(SERIES_ALIAS.keys())} or a raw BOJ series code (TK...).",
+        help=f"Alias {list(SERIES_ALIAS.keys())} or a raw BOJ series code.",
     )
+    parser.add_argument("--db", default=None, help="BOJ DB code (auto-detected for aliases; default CO).")
     parser.add_argument("--start", help="Start period (YYYYMM).")
     parser.add_argument("--end", help="End period (YYYYMM).")
     parser.add_argument("--out", help="Output CSV filename.")
     args = parser.parse_args()
     fetch_boj_data(
-        series=args.series, start_date=args.start, end_date=args.end, output_file=args.out
+        series=args.series, db=args.db, start_date=args.start, end_date=args.end, output_file=args.out
     )
 
 

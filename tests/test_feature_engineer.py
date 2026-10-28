@@ -5,7 +5,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from feature_engineer import engineer_features
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "feature_engineer.py"

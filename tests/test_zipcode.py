@@ -3,7 +3,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from zipcode_fetcher import fetch_zipcode
 
 MOCK_SUCCESS_RESPONSE = {

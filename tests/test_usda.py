@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-
-
 from usda_fetcher import (
     FAOSTAT_DOMAIN,
     USDA_COMMODITY_ALIAS,

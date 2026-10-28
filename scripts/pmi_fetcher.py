@@ -1,9 +1,8 @@
 import argparse
 
 import polars as pl
-from dotenv import load_dotenv
-
 from api_utils import cli_entry
+from dotenv import load_dotenv
 from fred_fetcher import fetch_fred_alias
 
 load_dotenv()
@@ -11,14 +10,11 @@ load_dotenv()
 # FRED経由で取得可能なPMI関連・製造業先行指標。
 # ISM の PMI 系列は 2016-06-24 に FRED から全22系列が削除されており、FRED では取得できない
 # (https://news.research.stlouisfed.org/2016/06/institute-for-supply-management-data-to-be-removed-from-fred/)。
-# S&P Global PMI も FRED には無い。以下の "pmi" を名乗るエイリアスは PMI そのものではない。
+# S&P Global PMI も FRED には無い。以下のエイリアスは製造業受注・生産・雇用・OECD CLI 等の代替先行指標。
 PMI_SERIES = {
-    # --- ISM (米国) ---
-    "ism_mfg": "MANEMP",            # PMIではない: All Employees, Manufacturing (BLS 製造業雇用者数, 千人)
-    "ism_mfg_pmi": "NAPM",          # FREDから削除済み (ISM Manufacturing PMI)。取得はエラーになる
-    "ism_services": "NMFCI",        # FREDから削除済み (ISM Non-Manufacturing)。取得はエラーになる
-    # --- 製造業の代替指標 ---
-    "us_mfg_pmi": "IPMAN",          # PMIではない: Industrial Production: Manufacturing (NAICS) (FRB G.17 生産指数)
+    # --- 製造業の代替指標（米国） ---
+    "ism_mfg": "MANEMP",            # 代替指標: All Employees, Manufacturing (BLS 製造業雇用者数, 千人)
+    "us_mfg_pmi": "IPMAN",          # 代替指標: Industrial Production: Manufacturing (NAICS) (FRB G.17 生産指数)
     "us_new_orders": "AMTMNO",      # 製造業新規受注 (PMI新規受注と高相関)
     "us_inventories": "AMTMTI",     # 製造業在庫
     "us_capacity_util": "MCUMFN",   # 製造業稼働率
@@ -30,6 +26,14 @@ PMI_SERIES = {
     "oecd_cli_eu": "EA19LOLITONOSTSAM", # OECD景気先行指数 (ユーロ圏)
 }
 
+# 2016-06-24 に FRED から削除された旧 ISM 系列（指定時は通信前に明示エラーを送出）
+_REMOVED_ISM_SERIES = {
+    "ism_mfg_pmi": "NAPM",
+    "ism_services": "NMFCI",
+    "napm": "NAPM",
+    "nmfci": "NMFCI",
+}
+
 
 def fetch_pmi_data(
     series: str = "us_new_orders",
@@ -39,11 +43,19 @@ def fetch_pmi_data(
 ) -> pl.DataFrame:
     """
     PMI および関連する製造業先行指標を FRED 経由で取得するわ。
-    ISM の完全なPMI系列はライセンス制約があるため、FREDで公開されている代替・関連指標を活用。
+    ISM の完全なPMI系列はライセンス制約により 2016年に FRED から削除されているため、
+    FREDで公開されている代替・関連指標を活用。
     - 'us_new_orders': 製造業新規受注 (PMI新規受注サブインデックスと高相関)
     - 'oecd_cli_us': 米国OECD景気先行指数 (製造業PMIの先行指標として標準)
     - 'global_econ_policy_uncertainty': 経済政策不確実性指数
     """
+    key_lower = series.strip().lower()
+    if key_lower in _REMOVED_ISM_SERIES:
+        fred_id = _REMOVED_ISM_SERIES[key_lower]
+        raise ValueError(
+            f"PMI: '{series}' ({fred_id}) は 2016-06-24 に FRED から削除されたため取得できません。"
+            f"代替指標（'us_new_orders', 'oecd_cli_us', 'us_mfg_pmi' 等）を指定してください。"
+        )
     return fetch_fred_alias(PMI_SERIES, series, start_date, end_date, output_file)
 
 

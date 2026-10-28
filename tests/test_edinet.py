@@ -2,13 +2,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import edinet_fetcher
 import httpx
 import polars as pl
 import pytest
-from edinetdb.client import AuthError, RateLimitError, Response, ServerError
-
-import edinet_fetcher
 from edinet_fetcher import fetch_edinet_financials, fetch_edinet_ratios
+from edinetdb.client import AuthError, RateLimitError, Response, ServerError
 
 
 def _resp(data: object) -> Response:
@@ -80,7 +79,6 @@ def test_unknown_kwargs_raise_type_error() -> None:
 
 
 @pytest.mark.parametrize("transient", [
-    RateLimitError("Rate limit exceeded", limit=None, reset=None, upgrade_url=None),
     ServerError("Server error (503)"),
     httpx.ConnectError("connection refused"),
 ])
@@ -88,7 +86,7 @@ def test_unknown_kwargs_raise_type_error() -> None:
 def test_transient_errors_are_retried(
     mock_client_cls: MagicMock, transient: Exception, no_retry_wait: None
 ) -> None:
-    """edinetdb の一時エラー（429/5xx/接続）はリトライされる。"""
+    """edinetdb の一時エラー（5xx/接続）はリトライされる。"""
     mock_client_cls.return_value.get.side_effect = [transient, _resp([{"fiscal_year": 2024}])]
 
     df = fetch_edinet_ratios("E02144")
@@ -96,11 +94,17 @@ def test_transient_errors_are_retried(
     assert mock_client_cls.return_value.get.call_count == 2
 
 
+@pytest.mark.parametrize("non_retryable", [
+    AuthError("invalid key"),
+    RateLimitError("Daily rate limit exceeded", limit=100, reset=None, upgrade_url=None),
+])
 @patch("edinet_fetcher.edinet_client.Client")
-def test_auth_error_not_retried(mock_client_cls: MagicMock, no_retry_wait: None) -> None:
-    """認証エラー等の恒久エラーはリトライせず即失敗。"""
-    mock_client_cls.return_value.get.side_effect = AuthError("invalid key")
+def test_auth_and_ratelimit_error_not_retried(
+    mock_client_cls: MagicMock, non_retryable: Exception, no_retry_wait: None
+) -> None:
+    """認証エラーおよび日次上限到達（RateLimitError）はリトライせず即失敗。"""
+    mock_client_cls.return_value.get.side_effect = non_retryable
 
-    with pytest.raises(AuthError):
+    with pytest.raises(type(non_retryable)):
         fetch_edinet_ratios("E02144")
     assert mock_client_cls.return_value.get.call_count == 1

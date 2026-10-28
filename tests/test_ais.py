@@ -4,8 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-
-
 from ais_fetcher import MAJOR_PORTS, fetch_ais_aishub, fetch_ais_data, fetch_ais_datalastic
 from api_utils import MissingApiKeyError
 

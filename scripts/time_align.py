@@ -7,6 +7,7 @@
 import argparse
 
 import polars as pl
+from api_utils import cli_entry, save_output
 
 _AGG = {
     "mean": pl.col("value").mean(),
@@ -37,6 +38,38 @@ def parse_dates(series: pl.Series, date_format: str | None = None) -> pl.Series:
         if non_null_before > 0 and parsed == non_null_before:
             return cand
         best = max(best, parsed)
+
+    if date_format is None and non_null_before > 0:
+        non_null = series.drop_nulls()
+        # 4桁年 (例: WorldBank / OECD の "2022")
+        if non_null.str.contains(r"^\d{4}$").all():
+            return (series + "-01-01").str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+        # 四半期 (例: OECD の "2024-Q1" / "2024Q1")
+        if non_null.str.contains(r"^\d{4}-?Q[1-4]$").all():
+            q_norm = (
+                series.str.replace("-Q1", "-01-01")
+                .str.replace("Q1", "-01-01")
+                .str.replace("-Q2", "-04-01")
+                .str.replace("Q2", "-04-01")
+                .str.replace("-Q3", "-07-01")
+                .str.replace("Q3", "-07-01")
+                .str.replace("-Q4", "-10-01")
+                .str.replace("Q4", "-10-01")
+            )
+            return q_norm.str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+        # 日本語年表記 (例: e-Stat の "2022年")
+        if non_null.str.contains(r"^\d{4}年$").all():
+            return (series.str.strip_suffix("年") + "-01-01").str.strptime(
+                pl.Date, "%Y-%m-%d", strict=False
+            )
+        # 日本語年月表記 (例: e-Stat の "2024年1月" / "2024年12月")
+        if non_null.str.contains(r"^\d{4}年\d{1,2}月$").all():
+            ym_norm = (
+                series.str.replace(r"^(\d{4})年(\d)月$", "${1}-0${2}-01")
+                .str.replace(r"^(\d{4})年(\d{2})月$", "${1}-${2}-01")
+            )
+            return ym_norm.str.strptime(pl.Date, "%Y-%m-%d", strict=False)
+
     raise ValueError(
         f"Could not parse date column '{series.name}' with formats {formats}: "
         f"at most {best} of {non_null_before} non-null values parsed. "
@@ -85,8 +118,10 @@ def align_frequency(
     out = df.select([date_col, value_col]).rename({date_col: "date", value_col: "value"})
 
     # date を Date 型へ（全件を解析できるフォーマットのみ採用。元から null の行だけ落とす）
-    if out["date"].dtype == pl.Utf8:
+    if out["date"].dtype == pl.String:
         out = out.with_columns(parse_dates(out["date"].alias(date_col)).alias("date"))
+    elif out["date"].dtype == pl.Datetime:
+        out = out.with_columns(pl.col("date").dt.date())
     out = out.drop_nulls("date").sort("date")
     if out.is_empty():
         return pl.DataFrame()
@@ -142,13 +177,21 @@ def align_many(
     for name, df in sources.items():
         filter_col, filter_val = filters.get(name, (None, None))
         aligned = align_frequency(
-            df, freq=freq, agg=agg, upsample_fill=upsample_fill,
-            filter_col=filter_col, filter_val=filter_val,
+            df,
+            freq=freq,
+            agg=agg,
+            upsample_fill=upsample_fill,
+            filter_col=filter_col,
+            filter_val=filter_val,
         )
         if aligned.is_empty():
             continue
         aligned = aligned.rename({"value": name})
-        merged = aligned if merged is None else merged.join(aligned, on="date", how="full", coalesce=True)
+        merged = (
+            aligned
+            if merged is None
+            else merged.join(aligned, on="date", how="full", coalesce=True)
+        )
 
     if merged is None:
         return pl.DataFrame()
@@ -166,11 +209,10 @@ def main() -> None:
     df = pl.read_csv(args.input)
     out = align_frequency(df, freq=args.freq, agg=args.agg)
     if args.out:
-        out.write_csv(args.out)
-        print(f"Saved {len(out)} rows to {args.out}")
+        save_output(out, args.out)
     else:
         print(out)
 
 
 if __name__ == "__main__":
-    main()
+    cli_entry(main)

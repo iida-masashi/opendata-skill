@@ -46,7 +46,7 @@ def _download_current_year() -> pl.DataFrame:
 
     当月分だけは月初にまだ公開されていないことがあるので 404 を許す。それ以外の失敗は伝播させる。
     """
-    today = datetime.datetime.now().date()  # noqa: DTZ005
+    today = datetime.datetime.now(datetime.UTC).date()
     frames = []
     for month in range(1, today.month + 1):
         try:

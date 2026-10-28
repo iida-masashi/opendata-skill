@@ -3,7 +3,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from googleapiclient.errors import HttpError
-
 from youtube_fetcher import fetch_youtube_comments
 
 

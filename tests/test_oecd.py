@@ -5,8 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
-
-
 from oecd_fetcher import OECD_DATASETS, fetch_oecd_data, parse_sdmx_json
 
 
@@ -183,3 +181,18 @@ def test_fetch_oecd_country_column_missing_raises(mock_get: MagicMock, make_resp
     mock_get.return_value = make_response(json=payload)
     with pytest.raises(ValueError, match="country"):
         fetch_oecd_data("MEI", countries="JPN")
+
+
+def test_oecd_normalizes_for_hub_and_time_align() -> None:
+    """OECD の TIME_PERIOD / Value が OpenDataHub._normalize_df で date / value になり time_align に繋がる。"""
+    from time_align import align_frequency
+
+    from scripts.opendata_hub import OpenDataHub
+
+    raw = parse_sdmx_json(_make_sdmx_payload())
+    norm = OpenDataHub._normalize_df(raw)
+    assert "date" in norm.columns
+    assert "value" in norm.columns
+    aligned = align_frequency(norm, freq="1y", filter_col="REF_AREA", filter_val="JPN")
+    assert aligned.height == 2
+

@@ -3,11 +3,10 @@ from datetime import UTC, datetime
 
 import polars as pl
 import requests  # noqa: F401 - テストが <module>.requests.get を patch する
-from dotenv import load_dotenv
-
 from api_utils import cli_entry, redact, require_api_key, save_output
 from api_utils import get_with_retry as _get_with_retry
 from api_utils import get_with_retry_redacted as _get_redacted
+from dotenv import load_dotenv
 
 load_dotenv()
 
