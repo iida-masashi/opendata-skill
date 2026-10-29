@@ -13,6 +13,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 需要予測・S&OP・与信管理向けの信用スプレッド・金融ストレス指標プリセット（FRED 公式系列）
+CREDIT_STRESS_SERIES: dict[str, str] = {
+    "hy_spread": "BAMLH0A0HYM2",        # 米ハイイールド債オプション調整後スプレッド OAS (ICE BofA, 日次)
+    "ig_spread": "BAMLC0A0CM",          # 米投資適格社債スプレッド OAS (ICE BofA, 日次)
+    "bbb_spread": "BAMLC0A4CBBB",       # 米BBB格社債スプレッド OAS (ICE BofA, 日次)
+    "yield_curve_10y2y": "T10Y2Y",      # 米国債 10年-2年 長短金利差 (FRB, 日次)
+    "yield_curve_10y3m": "T10Y3M",      # 米国債 10年-3ヶ月 長短金利差 (FRB, 日次)
+    "real_rate_10y": "DFII10",          # 米国10年実質金利・TIPS利回り (FRB, 日次)
+    "breakeven_10y": "T10YIE",          # 米国10年期待インフレ率 (FRB, 日次)
+    "vix": "VIXCLS",                    # CBOE VIX ボラティリティ指数 (CBOE, 日次)
+    "stl_fsi": "STLFSI4",               # セントルイス連銀 金融ストレス指数 (週次)
+    "chicago_nfci": "NFCI",             # シカゴ連銀 全米金融環境指数 (週次)
+}
+
+
 def fetch_fred_data(series_id: str, start_date: str | None = None, end_date: str | None = None, output_file: str | None = None) -> pl.DataFrame:  # noqa: E501
     """
     FRED (セントルイス連邦準備銀行) からマクロ経済指標を取得するわ。
@@ -82,15 +97,41 @@ def fetch_fred_alias(
     return df
 
 
+def fetch_credit_spread(
+    series: str = "hy_spread",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    output_file: str | None = None,
+) -> pl.DataFrame:
+    """
+    FRED 経由で信用スプレッド・長短金利差・実質金利・金融ストレス指標を取得する。
+    series の例:
+    - 'hy_spread': 米ハイイールド債スプレッド OAS (BAMLH0A0HYM2)
+    - 'ig_spread': 米投資適格社債スプレッド OAS (BAMLC0A0CM)
+    - 'yield_curve_10y2y': 米国債 10年-2年 長短金利差 (T10Y2Y)
+    - 'real_rate_10y': 米国10年実質金利 (DFII10)
+    - 'vix': CBOE VIX 指数 (VIXCLS)
+    - 'stl_fsi': セントルイス連銀 金融ストレス指数 (STLFSI4)
+    """
+    return fetch_fred_alias(CREDIT_STRESS_SERIES, series, start_date, end_date, output_file)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch Macroeconomic data from FRED API.")  # noqa: E501
-    parser.add_argument("--series", required=True, help="FRED Series ID (e.g., UNRATE, CPIAUCSL).")  # noqa: E501
+    parser = argparse.ArgumentParser(description="Fetch Macroeconomic & Credit Stress data from FRED API.")
+    parser.add_argument(
+        "--series",
+        required=True,
+        help=f"FRED Series ID (e.g., UNRATE) or credit alias {list(CREDIT_STRESS_SERIES.keys())}.",
+    )
     parser.add_argument("--start", help="Start date (YYYY-MM-DD).")
     parser.add_argument("--end", help="End date (YYYY-MM-DD).")
     parser.add_argument("--out", help="Output CSV filename")
 
     args = parser.parse_args()
-    fetch_fred_data(args.series, args.start, args.end, args.out)
+    if args.series.lower() in CREDIT_STRESS_SERIES:
+        fetch_credit_spread(args.series, args.start, args.end, args.out)
+    else:
+        fetch_fred_data(args.series, args.start, args.end, args.out)
 
 if __name__ == "__main__":
     cli_entry(main)

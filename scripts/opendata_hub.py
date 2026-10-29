@@ -177,11 +177,25 @@ class OpenDataHub:
         end_date: str | None = None,
         **kwargs: Any,
     ) -> pl.DataFrame:
-        """物流・海運コスト指標を取得する"""
+        """物流・海運コスト指標（Yahoo Finance ETF・船社バスケット）を取得する"""
         return self._cached_fetch(
             "freight", "fetch_freight_data", "freight",
             {"tickers": tickers, "start": start_date, "end": end_date, **kwargs}, 24,
             {"tickers": tickers, "start_date": start_date, "end_date": end_date, **kwargs},
+        )
+
+    def get_freight_index(
+        self,
+        series: str = "deep_sea_freight_ppi",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """FRED経由で公的な海運・航空・トラック運賃指数（BLS PPI）および Cass 物流指数を取得する"""
+        return self._cached_fetch(
+            "freight", "fetch_freight_index", "freight_index",
+            {"series": series, "start": start_date, "end": end_date, **kwargs}, 168,
+            {"series": series, "start_date": start_date, "end_date": end_date, **kwargs},
         )
 
     def get_fred(
@@ -196,6 +210,20 @@ class OpenDataHub:
             "fred", "fetch_fred_data", "fred",
             {"id": series_id, "start": start_date, "end": end_date, **kwargs}, 168,
             {"series_id": series_id, "start_date": start_date, "end_date": end_date, **kwargs},
+        )
+
+    def get_credit_spread(
+        self,
+        series: str = "hy_spread",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        **kwargs: Any,
+    ) -> pl.DataFrame:
+        """FRED経由で信用スプレッド・長短金利差・実質金利・金融ストレス指標を取得する"""
+        return self._cached_fetch(
+            "fred", "fetch_credit_spread", "fred_credit",
+            {"series": series, "start": start_date, "end": end_date, **kwargs}, 24,
+            {"series": series, "start_date": start_date, "end_date": end_date, **kwargs},
         )
 
     def get_yahoo(

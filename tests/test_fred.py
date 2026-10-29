@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 import requests
-from fred_fetcher import fetch_fred_alias, fetch_fred_data
+from fred_fetcher import (
+    CREDIT_STRESS_SERIES,
+    fetch_credit_spread,
+    fetch_fred_alias,
+    fetch_fred_data,
+)
 
 _OBS = {
     "observations": [
@@ -91,3 +96,37 @@ def test_fetch_fred_alias_unknown_passes_raw_id(mock_get: MagicMock, make_respon
     mock_get.return_value = make_response(json=_OBS)
     fetch_fred_alias({}, "RAWID")
     assert mock_get.call_args.kwargs["params"]["series_id"] == "RAWID"
+
+
+@pytest.mark.parametrize(
+    ("alias", "expected_id"),
+    [
+        ("hy_spread", "BAMLH0A0HYM2"),
+        ("ig_spread", "BAMLC0A0CM"),
+        ("yield_curve_10y2y", "T10Y2Y"),
+        ("real_rate_10y", "DFII10"),
+        ("vix", "VIXCLS"),
+    ],
+)
+@patch("fred_fetcher.requests.get")
+def test_fetch_credit_spread_resolves_presets(
+    mock_get: MagicMock, make_response, alias: str, expected_id: str, hub
+) -> None:
+    """信用スプレッド・金融ストレス指標プリセットが FRED 系列IDへ解決され、Hub 経由でも取得できる。"""
+    assert CREDIT_STRESS_SERIES[alias] == expected_id
+    mock_get.return_value = make_response(json=_OBS)
+
+    df = hub.get_credit_spread(series=alias, start_date="2023-01-01", end_date="2023-12-31")
+
+    assert mock_get.call_args.kwargs["params"]["series_id"] == expected_id
+    assert df["series"].to_list() == [alias]
+    assert df["series_id"].to_list() == [expected_id]
+    assert {"date", "value"} <= set(df.columns)
+
+
+@patch("fred_fetcher.requests.get")
+def test_fetch_credit_spread_direct(mock_get: MagicMock, make_response) -> None:
+    mock_get.return_value = make_response(json=_OBS)
+    df = fetch_credit_spread("stl_fsi")
+    assert mock_get.call_args.kwargs["params"]["series_id"] == "STLFSI4"
+    assert df["series"].to_list() == ["stl_fsi"]

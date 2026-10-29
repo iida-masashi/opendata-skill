@@ -197,7 +197,7 @@ uv run python scripts/data_suggester.py "Retail"
 | **JNTO 訪日外客数** | `estat_fetcher.py` | `get_inbound_visitors()` | 要 (`ESTAT_API_KEY`) | 7d | 月次 | 国籍・地域別の入国外国人数（港次元を自動集約） |
 | **Yahoo Finance** | `yahoo_fetcher.py` | `get_yahoo()` | **不要** | 12h | 日次 | 株価（日米欧）・為替（FX）・コモディティ先物（原油・銅・穀物）・ETFフォールバック |
 | **ECB / BOJ 公的為替** | `official_fx_fetcher.py` | `get_official_fx()` | **不要** | 12h | 日次/月次 | ECB Eurosystem公式レート・日銀公的為替レート（会計・税務・契約用） |
-| **FRED（米連銀）** | `fred_fetcher.py` | `get_fred()` | 要 (`FRED_API_KEY`) | 24h | 日次/月次/四半期 | 米国政策金利、CPI、失業率、鉱工業生産、住宅着工等 |
+| **FRED（米連銀・信用スプレッド）** | `fred_fetcher.py` | `get_fred()` / `get_credit_spread()` | 要 (`FRED_API_KEY`) | 24h | 日次/週次/月次 | **【v2.4拡充】** 米国政策金利、CPI、失業率に加え、ハイイールド債・投資適格債スプレッド (`hy_spread`, `ig_spread`)、長短金利差 (`yield_curve_10y2y`)、実質金利 (`real_rate_10y`)、VIX、金融ストレス指数 (`stl_fsi`) プリセット |
 | **World Bank** | `worldbank_fetcher.py` | `get_economic()` | **不要** | 30d | 年次 | 各国GDP、インフレ率、人口、貿易収支（Hubで `YR2023` 横持ちを `date`/`value` 縦持ちへ自動正規化） |
 | **OECD** | `oecd_fetcher.py` | `get_oecd()` | **不要** | 30d | 月次/四半期/年次 | 先進国の主要経済指標（MEI）、CLI、労働市場統計 |
 | **EDINET DB** | `edinet_fetcher.py` | `get_edinet_financials()` | 要 (`EDINET_API_KEY`) | 24h | 年次/四半期 | 上場企業の有価証券報告書財務データ（売上・営業利益・ROE/ROA等） |
@@ -231,7 +231,7 @@ uv run python scripts/data_suggester.py "Retail"
 | **PMI / 製造業受注 / CLI** | `pmi_fetcher.py` | `get_pmi()` | 要 (`FRED_API_KEY`) | 24h | 月次 | 米製造業新規受注、日米中欧 OECD 景気先行指数（CLI）、政策不確実性指数 |
 | **半導体 Book-to-Bill** | `semicon_fetcher.py` | `get_semicon()` | 要 (`FRED_API_KEY`) | 7d | 月次 | 米コンピュータ・電子製品製造業の出荷・新規受注・在庫および Book-to-Bill 比 |
 | **UN Comtrade（国際貿易）** | `comtrade_fetcher.py` | `get_comtrade()` | 要 (`COMTRADE_API_KEY`) | 7d | 月次/年次 | HSコード粒度の二国間輸出入貿易フロー（金額・数量・重量） |
-| **海運市況・物流ETF** | `freight_fetcher.py` | `get_freight()` | **不要** | 12h | 日次 | BDRY（バルチック海運指数連動ETF）、BOAT、ZIM、海運大手の市況データ |
+| **海運市況・公的運賃指数** | `freight_fetcher.py` | `get_freight()` / `get_freight_index()` | ETF不要 / 指数要 (`FRED_API_KEY`) | 24h / 7d | 日次/月次 | **【v2.4拡充】** 日次海運ETF・船社プリセット（`BDRY`, `BWET`, `jp_liners`）＋ FRED公的運賃PPI（外航深海海運 `deep_sea_freight_ppi`、航空 `air_freight_ppi`、トラック `trucking_freight_ppi`）および Cass 物流指数 |
 | **AIS 港湾混雑** | `ais_fetcher.py` | `get_port_congestion()` | 要 (`DATALASTIC_API_KEY` / `AISHUB_USERNAME`) | 1h | スナップショット | 世界主要15港湾（上海・シンガポール・LA・ロッテルダム等）の停泊・航行船舶数と平均船速 |
 | **GDELT（地政学リスク）** | `gdelt_fetcher.py` | `get_gdelt()` | **不要** | 2h | 15分/日次 | スエズ・紅海・台湾海峡等のサプライチェーン断絶ニュース量・感情トーン |
 | **USDA / FAOSTAT（農業・食料）** | `usda_fetcher.py` | `get_agri()` | FAO不要 / USDA要 (`USDA_API_KEY`) | 7d | 年次 | グローバル作況・生産量・面積（FAOSTAT）および米国農務省 QuickStats |

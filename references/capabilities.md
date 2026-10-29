@@ -70,6 +70,12 @@
 *   **PMI / ISM / OECD CLI (`pmi_fetcher.py`)**
     *   **取得データ**: FRED経由で製造業新規受注、OECD景気先行指数 (米/日/中/EU)、経済政策不確実性指数。
     *   **特徴**: 需要予測モデルの標準外生変数。製造業PMIの代替・補完として機能。`hub.get_pmi()`。
+*   **信用スプレッド・金融ストレス (`fred_fetcher.py`)** — v2.4 拡充
+    *   **取得データ**: ハイイールド債スプレッド (`hy_spread`)、投資適格社債スプレッド (`ig_spread`)、BBB社債スプレッド (`bbb_spread`)、長短金利差 (`yield_curve_10y2y`, `yield_curve_10y3m`)、10年実質金利 (`real_rate_10y`)、期待インフレ率 (`breakeven_10y`)、VIX (`vix`)、セントルイス連銀金融ストレス指数 (`stl_fsi`)、シカゴ連銀NFCI (`chicago_nfci`)。
+    *   **特徴**: 信用収縮・在庫圧縮（デストッキング）および設備投資・耐久財需要減速の12〜18ヶ月先行指標。`hub.get_credit_spread()`。
+*   **海運市況・公的運賃指数 (`freight_fetcher.py`)** — v2.4 拡充
+    *   **取得データ**: 日次ETF・船社バスケット (`dry_bulk`="BDRY", `tanker`="BWET", `jp_liners`="9101.T,9104.T,9107.T") および FRED 公的運賃 PPI (`deep_sea_freight_ppi`, `air_freight_ppi`, `trucking_freight_ppi`)、Cass 貨物輸送指数 (`cass_shipments`, `cass_expenditures`)、米運輸省 TSI (`tsi_freight`)。
+    *   **特徴**: 日次の海運市況プロキシと月次の公的確定運賃・実出荷インデックスの両面から物流コストを捕捉。`hub.get_freight()`, `hub.get_freight_index()`。
 *   **UN Comtrade (`comtrade_fetcher.py`)**
     *   **取得データ**: HSコード粒度のグローバル貿易フロー。輸入・輸出、相手国別内訳。
     *   **特徴**: サプライ上流の変動を捕捉。e-Stat貿易統計を国際的に補完。報告国 (`reporter`) は1か国を指定する（`ALL` = World は相手国 `partner` にだけ使え、報告国に指定すると ValueError）。台湾 (`TW`) は報告国に無く、相手国としては 490 "Other Asia, nes" に計上される。`hub.get_comtrade()`。

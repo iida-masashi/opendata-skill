@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import polars as pl
 import pytest
-from freight_fetcher import fetch_freight_data
+from freight_fetcher import (
+    FREIGHT_ETF_PRESETS,
+    FREIGHT_INDEX_SERIES,
+    fetch_freight_data,
+    fetch_freight_index,
+)
 
 
 def _yf_download_like(tickers: list[str]) -> pd.DataFrame:
@@ -85,3 +90,51 @@ def test_hub_get_freight(mock_dl: MagicMock, hub) -> None:
 
     assert {"date", "value", "Ticker"} <= set(df.columns)
     assert df.height == 3
+
+
+@patch("yahoo_fetcher.yf.download")
+def test_freight_etf_preset_resolves(mock_dl: MagicMock) -> None:
+    """FREIGHT_ETF_PRESETS のキー（tanker, jp_liners 等）がティッカー一覧に展開される。"""
+    assert "jp_liners" in FREIGHT_ETF_PRESETS
+    mock_dl.return_value = _yf_download_like(["9101.T", "9104.T", "9107.T"])
+
+    df = fetch_freight_data("jp_liners", "2024-01-01", "2024-01-05")
+
+    assert mock_dl.call_args[0][0] == ["9101.T", "9104.T", "9107.T"]
+    assert sorted(df["Ticker"].unique().to_list()) == ["9101.T", "9104.T", "9107.T"]
+
+
+@pytest.mark.parametrize(
+    ("alias", "expected_id"),
+    [
+        ("deep_sea_freight_ppi", "PCU483111483111"),
+        ("air_freight_ppi", "PCU481112481112"),
+        ("trucking_freight_ppi", "PCU484121484121"),
+        ("cass_shipments", "FRGSHPUSM649NCIS"),
+        ("cass_expenditures", "FRGEXPUSM649NCIS"),
+        ("tsi_freight", "TSIFRGHT"),
+    ],
+)
+@patch("fred_fetcher.requests.get")
+def test_freight_index_resolves_and_hub_works(
+    mock_get: MagicMock,
+    make_response,
+    monkeypatch: pytest.MonkeyPatch,
+    hub,
+    alias: str,
+    expected_id: str,
+) -> None:
+    """FRED 経由の公的海運・航空・トラック運賃 PPI / Cass 物流指数が取得できる。"""
+    assert FREIGHT_INDEX_SERIES[alias] == expected_id
+    monkeypatch.setenv("FRED_API_KEY", "test_key")
+    mock_get.return_value = make_response(
+        json={"observations": [{"date": "2024-01-01", "value": "215.4"}]}
+    )
+
+    df = fetch_freight_index(alias, "2024-01-01", "2024-12-31")
+    assert mock_get.call_args.kwargs["params"]["series_id"] == expected_id
+    assert df["series"].to_list() == [alias]
+
+    df_hub = hub.get_freight_index(series=alias, start_date="2024-01-01", end_date="2024-12-31")
+    assert {"date", "value", "series", "series_id"} <= set(df_hub.columns)
+    assert df_hub.height == 1
